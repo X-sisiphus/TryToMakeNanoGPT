@@ -28,7 +28,7 @@ def getBatch():
         (batchSize,)
     )
     #input
-    #stack将数据由一维张量堆叠为二维
+    #stack将数据由一维张量堆叠为二维，原本数据是平铺的，现在多了batch作为纵轴
     x = torch.stack([
         data[i:i+blockSize]
         for i in ix
