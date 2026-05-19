@@ -42,5 +42,6 @@ def getBatch():
 model = BigramLanguageModel(vocabularySize)
 #测试
 xb,yb = getBatch()
-out = model(xb)
-print(out.shape)
+logits,loss = model(xb,yb)
+print(logits.shape)
+print(loss)
