@@ -1,6 +1,5 @@
-from inspect import stack
-from random import randint
 import torch
+from model import BigramLanguageModel
 
 #引入文本、编码、解码
 with open("input.txt","r",encoding = "utf-8") as trainTxt:
@@ -23,7 +22,7 @@ blockSize = 8
 batchSize = 4
 def getBatch():
     #随机四个起点
-    ix = randint(
+    ix = torch.randint(
         len(data) - blockSize,
         (batchSize,)
     )
@@ -39,3 +38,9 @@ def getBatch():
         for i in ix
     ])
     return x,y
+#实例化
+model = BigramLanguageModel(vocabularySize)
+#测试
+xb,yb = getBatch()
+out = model(xb)
+print(out.shape)
