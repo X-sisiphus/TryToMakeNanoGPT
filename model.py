@@ -8,16 +8,29 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         #生成了一个token对应向量的表，由pytorch随机生成
         #这里的生成的结果直接就是代表了预测值，简化了由特征到预测的过程，也可以说预测的结果本身也是一种特征
+        #self.tokenEmbeddingTable = nn.Embedding(
+        #    vocabSize,
+        #    vocabSize
+        
+        #原先的写法简化了特征,现在让embedding的结果表示语义而不是预测
+        nEmbd = 32
         self.tokenEmbeddingTable = nn.Embedding(
             vocabSize,
+            nEmbd
+        )
+
+        self.languageModelHead = nn.Linear(
+            nEmbd,
             vocabSize
         )
+
     
     #forword
     #idx是二维张量
     def forward(self, idx, targets = None):
         #将idx中的元素替换为对应的随机向量，将idx升维
-        logits = self.tokenEmbeddingTable(idx)
+        tokenEmbd = self.tokenEmbeddingTable(idx)
+        logits = self.languageModelHead(tokenEmbd)
         if targets is None:
             loss = None
         else:
