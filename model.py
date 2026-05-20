@@ -12,6 +12,7 @@ class BigramLanguageModel(nn.Module):
             vocabSize,
             vocabSize
         )
+    
     #forword
     #idx是二维张量
     def forward(self, idx, targets = None):
@@ -27,5 +28,22 @@ class BigramLanguageModel(nn.Module):
             #下面的方法会先softmax，再计算loss（对数似然损失）
             loss = F.cross_entropy(logits, targets)
         return logits,loss
+    
+    #generate
+    def generate(self,idx,maxNewTokens):
+        for _ in range(maxNewTokens):
+            logits, loss = self(idx)
+            logits = logits[:,-1,:]
+            probs = torch.softmax(logits, dim=-1)
+            nextIdx = torch.multinomial(
+            probs,
+            num_samples=1
+            )
+            idx = torch.cat((idx,nextIdx),dim=1)
+        return idx
+        
+
+
+
 
 

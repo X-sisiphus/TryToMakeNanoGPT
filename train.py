@@ -50,12 +50,25 @@ optimizer = torch.optim.AdamW(
     lr = 1e-3
 )
 
-#测试
+#训练
 for steps in range(10000):
     xb,yb = getBatch()
     logits,loss = model(xb,yb)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    if steps % 1000 == 0:
-        print(loss.item())
+    #if steps % 1000 == 0:
+        #print(loss.item())
+
+#生成
+context = torch.zeros((1,1), dtype=torch.long)
+generated = model.generate(
+    context,
+    maxNewTokens=100
+)
+print(
+    decode(
+        generated[0].tolist()
+    )
+)
+
