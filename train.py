@@ -12,11 +12,13 @@ def encode(s):
     return [stringToInt[c] for c in s]
 def decode(In):
     return ''.join([intToString[i] for i in In])
+
 #张量化
 data = torch.tensor(
     encode(text),
     dtype = torch.long 
 )
+
 #构造训练样本
 blockSize = 8
 batchSize = 4
@@ -38,10 +40,22 @@ def getBatch():
         for i in ix
     ])
     return x,y
+
 #实例化
 model = BigramLanguageModel(vocabularySize)
+
+#优化器
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr = 1e-3
+)
+
 #测试
-xb,yb = getBatch()
-logits,loss = model(xb,yb)
-print(logits.shape)
-print(loss)
+for steps in range(10000):
+    xb,yb = getBatch()
+    logits,loss = model(xb,yb)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    if steps % 1000 == 0:
+        print(loss.item())
