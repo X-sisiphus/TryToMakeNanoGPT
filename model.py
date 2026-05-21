@@ -13,14 +13,22 @@ class Head(nn.Module):
         self.key = nn.Linear(nEmbd, headSize, bias=False)
         self.query = nn.Linear(nEmbd, headSize, bias=False)
         self.value = nn.Linear(nEmbd, headSize, bias=False)
-
+        self.register_buffer('tril',torch.tril(torch.ones(blockSize, blockSize)))
+    
     def forward(self, x):
         B,T,C = x.shape
         k = self.key(x)
         q = self.query(x)
         #注意力矩阵，反应了两个token间的注意力
-        wei = q @ k.transpose(-2,-1)
-
+        wei = q @ k.transpose(-2,-1) * (C ** -0.5)
+        #mask
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+        #softmax
+        wei = F.softmax(wei, dim=-1)
+        #value 聚合
+        v = self.value(x)
+        out = wei @ v
+        return out
 
 class BigramLanguageModel(nn.Module):
     #embedding
@@ -45,10 +53,14 @@ class BigramLanguageModel(nn.Module):
             nEmbd
         )
 
+        self.saHead = Head(nEmbd)
+
         self.languageModelHead = nn.Linear(
             nEmbd,
             vocabSize
         )
+        
+        
 
     
     #forword
@@ -60,6 +72,7 @@ class BigramLanguageModel(nn.Module):
         #对一个batch中T个元素0——T生成位置编码
         positionEmbd = self.positionEmbeddingTable(torch.arange(T))
         x = tokenEmbd + positionEmbd
+        x = self.saHead(x)
         logits = self.languageModelHead(x)
         if targets is None:
             loss = None
@@ -75,7 +88,9 @@ class BigramLanguageModel(nn.Module):
     #generate
     def generate(self,idx,maxNewTokens):
         for _ in range(maxNewTokens):
-            logits, loss = self(idx)
+            #剪切token
+            idxCond = idx[:, -blockSize:]
+            logits, loss = self(idxCond)
             logits = logits[:,-1,:]
             probs = torch.softmax(logits, dim=-1)
             nextIdx = torch.multinomial(

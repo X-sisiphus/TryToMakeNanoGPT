@@ -57,8 +57,8 @@ for steps in range(10000):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    #if steps % 1000 == 0:
-        #print(loss.item())
+    if steps % 1000 == 0:
+        print(loss.item())
 
 #生成
 context = torch.zeros((1,1), dtype=torch.long)
