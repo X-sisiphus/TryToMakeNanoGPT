@@ -9,7 +9,7 @@ class Head(nn.Module):
 
     def __init__(self, headSize):
         super().__init__()
-
+        self.headSize = headSize
         self.key = nn.Linear(nEmbd, headSize, bias=False)
         self.query = nn.Linear(nEmbd, headSize, bias=False)
         self.value = nn.Linear(nEmbd, headSize, bias=False)
@@ -20,7 +20,7 @@ class Head(nn.Module):
         k = self.key(x)
         q = self.query(x)
         #注意力矩阵，反应了两个token间的注意力
-        wei = q @ k.transpose(-2,-1) * (C ** -0.5)
+        wei = q @ k.transpose(-2,-1) * (self.headSize ** -0.5)
         #mask
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
         #softmax
@@ -28,6 +28,21 @@ class Head(nn.Module):
         #value 聚合
         v = self.value(x)
         out = wei @ v
+        return out
+
+#多头注意力机制
+class MultiHeadAttention(nn.Module):
+    def __init__(self, numHeads, headSize):
+        super().__init__()
+        self.heads = nn.ModuleList([
+            Head(headSize)
+            for _ in range(numHeads)
+        ])
+    def forward(self, x):
+        out = torch.cat(
+            [h(x) for h in self.heads],
+            dim=-1
+        )
         return out
 
 class BigramLanguageModel(nn.Module):
@@ -53,7 +68,13 @@ class BigramLanguageModel(nn.Module):
             nEmbd
         )
 
-        self.saHead = Head(nEmbd)
+        numHeads = 4
+        headSize = nEmbd // numHeads
+        
+        self.saHead = MultiHeadAttention(
+            numHeads,
+            headSize
+        )
 
         self.languageModelHead = nn.Linear(
             nEmbd,
