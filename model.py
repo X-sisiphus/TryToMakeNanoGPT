@@ -38,12 +38,29 @@ class MultiHeadAttention(nn.Module):
             Head(headSize)
             for _ in range(numHeads)
         ])
+        self.proj = nn.Linear(
+            headSize * numHeads,
+            nEmbd
+        )
     def forward(self, x):
         out = torch.cat(
             [h(x) for h in self.heads],
             dim=-1
         )
+        out = self.proj(out)
         return out
+
+#FFN
+class FeedForward(nn.Module):
+    def __init__(self, nEmbd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(nEmbd, 4 * nEmbd),
+            nn.ReLU(),
+            nn.Linear(4 * nEmbd, nEmbd),
+        )
+    def forward(self, x):
+        return self.net(x)
 
 class BigramLanguageModel(nn.Module):
     #embedding
@@ -68,6 +85,9 @@ class BigramLanguageModel(nn.Module):
             nEmbd
         )
 
+        #前馈神经网络
+        self.ffwd = FeedForward(nEmbd)
+
         numHeads = 4
         headSize = nEmbd // numHeads
         
@@ -80,6 +100,10 @@ class BigramLanguageModel(nn.Module):
             nEmbd,
             vocabSize
         )
+
+        #LayerNorm
+        self.ln1 = nn.LayerNorm(nEmbd)
+        self.ln2 = nn.LayerNorm(nEmbd)
         
         
 
@@ -93,7 +117,8 @@ class BigramLanguageModel(nn.Module):
         #对一个batch中T个元素0——T生成位置编码
         positionEmbd = self.positionEmbeddingTable(torch.arange(T))
         x = tokenEmbd + positionEmbd
-        x = self.saHead(x)
+        x = x + self.saHead(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
         logits = self.languageModelHead(x)
         if targets is None:
             loss = None
