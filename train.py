@@ -42,7 +42,7 @@ def getBatch():
     return x,y
 
 #实例化
-model = BigramLanguageModel(vocabularySize)
+model = BigramLanguageModel(vocabularySize,blockSize)
 
 #优化器
 optimizer = torch.optim.AdamW(
