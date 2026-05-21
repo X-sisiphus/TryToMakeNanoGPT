@@ -2,6 +2,26 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+nEmbd = 32
+blockSize = 8
+
+class Head(nn.Module):
+
+    def __init__(self, headSize):
+        super().__init__()
+
+        self.key = nn.Linear(nEmbd, headSize, bias=False)
+        self.query = nn.Linear(nEmbd, headSize, bias=False)
+        self.value = nn.Linear(nEmbd, headSize, bias=False)
+
+    def forward(self, x):
+        B,T,C = x.shape
+        k = self.key(x)
+        q = self.query(x)
+        #注意力矩阵，反应了两个token间的注意力
+        wei = q @ k.transpose(-2,-1)
+
+
 class BigramLanguageModel(nn.Module):
     #embedding
     def __init__(self, vocabSize, blockSize):
