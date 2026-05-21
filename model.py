@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-nEmbd = 32
-blockSize = 8
-dropout = 0
+nEmbd = 384
+blockSize = 256
+#对于小模型，dropout反而会影响
+dropout = 0.2
 
 class Head(nn.Module):
 
@@ -62,7 +63,7 @@ class FeedForward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(nEmbd, 4 * nEmbd),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(4 * nEmbd, nEmbd),
             nn.Dropout(dropout)
         )
@@ -115,14 +116,14 @@ class BigramLanguageModel(nn.Module):
             nEmbd
         )
 
-        numHeads = 4
+        numHeads = 6
 
         self.languageModelHead = nn.Linear(
             nEmbd,
             vocabSize
         )
 
-        nLayer = 3
+        nLayer = 6
         self.blocks = nn.Sequential(*[Block(nEmbd, numHeads) for _ in range(nLayer)])
 
         self.ln_f = nn.LayerNorm(nEmbd)

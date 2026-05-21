@@ -1,6 +1,7 @@
 import torch
 from model import BigramLanguageModel
-
+device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+print(f"🔥 确认：正在使用 {device} 运行")
 #引入文本、编码、解码
 with open("input.txt","r",encoding = "utf-8") as trainTxt:
     text = trainTxt.read()
@@ -20,8 +21,8 @@ data = torch.tensor(
 )
 
 #构造训练样本
-blockSize = 8
-batchSize = 4
+blockSize = 256
+batchSize = 64
 def getBatch():
     #随机四个起点
     ix = torch.randint(
@@ -39,29 +40,34 @@ def getBatch():
         data[i+1:i+blockSize+1]
         for i in ix
     ])
+    x, y = x.to(device), y.to(device)
     return x,y
 
 #实例化
 model = BigramLanguageModel(vocabularySize,blockSize)
-
+model.to(device)
 #优化器
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr = 1e-3
+    lr = 3e-4
 )
 
 #训练
-for steps in range(10000):
+for steps in range(5000):
     xb,yb = getBatch()
     logits,loss = model(xb,yb)
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
     if steps % 1000 == 0:
         print(loss.item())
 
 #生成
-context = torch.zeros((1,1), dtype=torch.long)
+context = torch.zeros(
+    (1,1),
+    dtype=torch.long,
+    device=device
+)
 generated = model.generate(
     context,
     maxNewTokens=100
