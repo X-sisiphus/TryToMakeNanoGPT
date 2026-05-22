@@ -59,7 +59,7 @@ for steps in range(5000):
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
-    if steps % 1000 == 0:
+    if steps % 100 == 0:
         print(loss.item())
 
 #生成
