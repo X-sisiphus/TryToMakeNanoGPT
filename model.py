@@ -1,22 +1,48 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
 
-nEmbd = 384
-blockSize = 256
-#对于小模型，dropout反而会影响
-dropout = 0.2
+@dataclass
+class GPTConfig:
+    vocabSize: int
+    blockSize: int = 256
+    nEmbd: int = 384
+    nLayer: int = 6
+    numHeads: int = 6
+    dropout: float = 0.2
+    normType: str = "layernorm"
+    ffnType: str = "gelu"
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, nEmbd, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(nEmbd))
+        self.eps = eps
+
+    def forward(self, x):
+        x = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        return self.weight * x
+
+
+def build_norm(config):
+    if config.normType == "layernorm":
+        return nn.LayerNorm(config.nEmbd)
+    if config.normType == "rmsnorm":
+        return RMSNorm(config.nEmbd)
+    raise ValueError(f"不支持的 normType: {config.normType}")
 
 class Head(nn.Module):
 
-    def __init__(self, headSize):
+    def __init__(self, config, headSize):
         super().__init__()
         self.headSize = headSize
-        self.key = nn.Linear(nEmbd, headSize, bias=False)
-        self.query = nn.Linear(nEmbd, headSize, bias=False)
-        self.value = nn.Linear(nEmbd, headSize, bias=False)
-        self.register_buffer('tril',torch.tril(torch.ones(blockSize, blockSize)))
-        self.dropout = nn.Dropout(dropout)
+        self.key = nn.Linear(config.nEmbd, headSize, bias=False)
+        self.query = nn.Linear(config.nEmbd, headSize, bias=False)
+        self.value = nn.Linear(config.nEmbd, headSize, bias=False)
+        self.register_buffer('tril',torch.tril(torch.ones(config.blockSize, config.blockSize)))
+        self.dropout = nn.Dropout(config.dropout)
     
     def forward(self, x):
         B,T,C = x.shape
@@ -37,17 +63,19 @@ class Head(nn.Module):
 
 #多头注意力机制
 class MultiHeadAttention(nn.Module):
-    def __init__(self, numHeads, headSize):
+    def __init__(self, config):
         super().__init__()
+        assert config.nEmbd % config.numHeads == 0
+        headSize = config.nEmbd // config.numHeads
         self.heads = nn.ModuleList([
-            Head(headSize)
-            for _ in range(numHeads)
+            Head(config, headSize)
+            for _ in range(config.numHeads)
         ])
         self.proj = nn.Linear(
-            headSize * numHeads,
-            nEmbd
+            headSize * config.numHeads,
+            config.nEmbd
         )
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(config.dropout)
     def forward(self, x):
         out = torch.cat(
             [h(x) for h in self.heads],
@@ -59,33 +87,41 @@ class MultiHeadAttention(nn.Module):
 
 #FFN
 class FeedForward(nn.Module):
-    def __init__(self, nEmbd):
+    def __init__(self, config):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(nEmbd, 4 * nEmbd),
-            nn.GELU(),
-            nn.Linear(4 * nEmbd, nEmbd),
-            nn.Dropout(dropout)
-        )
+        self.ffnType = config.ffnType
+        if self.ffnType == "gelu":
+            self.net = nn.Sequential(
+                nn.Linear(config.nEmbd, 4 * config.nEmbd),
+                nn.GELU(),
+                nn.Linear(4 * config.nEmbd, config.nEmbd),
+                nn.Dropout(config.dropout)
+            )
+        elif self.ffnType == "swiglu":
+            hiddenDim = int(8 * config.nEmbd / 3)
+            self.w1 = nn.Linear(config.nEmbd, hiddenDim, bias=False)
+            self.w2 = nn.Linear(hiddenDim, config.nEmbd, bias=False)
+            self.w3 = nn.Linear(config.nEmbd, hiddenDim, bias=False)
+            self.dropout = nn.Dropout(config.dropout)
+        else:
+            raise ValueError(f"不支持的 ffnType: {self.ffnType}")
+
     def forward(self, x):
+        if self.ffnType == "swiglu":
+            x = self.w2(F.silu(self.w1(x)) * self.w3(x))
+            return self.dropout(x)
         return self.net(x)
 #block
 class Block(nn.Module):
 
-    def __init__(self, nEmbd, numHeads):
+    def __init__(self, config):
         super().__init__()
 
-        headSize = nEmbd // numHeads
-
-        self.sa = MultiHeadAttention(
-            numHeads,
-            headSize
-        )
+        self.sa = MultiHeadAttention(config)
         #前馈神经网络
-        self.ffwd = FeedForward(nEmbd)
-        #LayerNorm
-        self.ln1 = nn.LayerNorm(nEmbd)
-        self.ln2 = nn.LayerNorm(nEmbd)
+        self.ffwd = FeedForward(config)
+        self.ln1 = build_norm(config)
+        self.ln2 = build_norm(config)
 
     def forward(self, x):
 
@@ -96,8 +132,13 @@ class Block(nn.Module):
 
 class BigramLanguageModel(nn.Module):
     #embedding
-    def __init__(self, vocabSize, blockSize):
+    def __init__(self, vocabSize, blockSize=None, config=None):
         super().__init__()
+        if config is None:
+            if blockSize is None:
+                blockSize = 256
+            config = GPTConfig(vocabSize=vocabSize, blockSize=blockSize)
+        self.config = config
         #生成了一个token对应向量的表，由pytorch随机生成
         #这里的生成的结果直接就是代表了预测值，简化了由特征到预测的过程，也可以说预测的结果本身也是一种特征
         #self.tokenEmbeddingTable = nn.Embedding(
@@ -106,27 +147,24 @@ class BigramLanguageModel(nn.Module):
         
         #原先的写法简化了特征,现在让embedding的结果表示语义而不是预测
         self.tokenEmbeddingTable = nn.Embedding(
-            vocabSize,
-            nEmbd
+            config.vocabSize,
+            config.nEmbd
         )
 
         #增加了位置向量
         self.positionEmbeddingTable = nn.Embedding(
-            blockSize,
-            nEmbd
+            config.blockSize,
+            config.nEmbd
         )
-
-        numHeads = 6
 
         self.languageModelHead = nn.Linear(
-            nEmbd,
-            vocabSize
+            config.nEmbd,
+            config.vocabSize
         )
 
-        nLayer = 6
-        self.blocks = nn.Sequential(*[Block(nEmbd, numHeads) for _ in range(nLayer)])
+        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.nLayer)])
 
-        self.ln_f = nn.LayerNorm(nEmbd)
+        self.ln_f = build_norm(config)
         
     #forword
     #idx是二维张量
@@ -155,7 +193,7 @@ class BigramLanguageModel(nn.Module):
     def generate(self,idx,maxNewTokens):
         for _ in range(maxNewTokens):
             #剪切token
-            idxCond = idx[:, -blockSize:]
+            idxCond = idx[:, -self.config.blockSize:]
             logits, loss = self(idxCond)
             logits = logits[:,-1,:]
             probs = torch.softmax(logits, dim=-1)
