@@ -1,7 +1,10 @@
 import torch
+import os
 from model import BigramLanguageModel, GPTConfig
-device = 'mps' if torch.backends.mps.is_available() else 'cpu'
-print(f"🔥 确认：正在使用 {device} 运行")
+
+useMps = os.environ.get("USE_MPS") == "1"
+device = 'mps' if torch.backends.mps.is_available() and useMps else 'cpu'
+print(f"🔥 确认：正在使用 {device} 运行", flush=True)
 #引入文本、编码、解码
 with open("input.txt","r",encoding = "utf-8") as trainTxt:
     text = trainTxt.read()
@@ -23,8 +26,8 @@ data = torch.tensor(
 #构造训练样本
 blockSize = 256
 batchSize = 64
-maxIters = 5000
-evalInterval = 100
+maxIters = int(os.environ.get("MAX_ITERS", 5000))
+evalInterval = int(os.environ.get("EVAL_INTERVAL", 100))
 def getBatch():
     #随机四个起点
     ix = torch.randint(
@@ -72,7 +75,7 @@ for steps in range(maxIters):
     loss.backward()
     optimizer.step()
     if steps % evalInterval == 0:
-        print(loss.item())
+        print(loss.item(), flush=True)
 
 #生成
 context = torch.zeros(
@@ -89,4 +92,3 @@ print(
         generated[0].tolist()
     )
 )
-
