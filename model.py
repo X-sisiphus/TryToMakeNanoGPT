@@ -15,6 +15,7 @@ class GPTConfig:
     ffnType: str = "gelu"
     useRoPE: bool = False
     numKvHeads: int = None
+    useFlashAttention: bool = True
 
 def rotate_half(x):
     x1 = x[..., ::2]
@@ -102,6 +103,7 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.nEmbd % config.numHeads == 0
+        self.useFlashAttention = config.useFlashAttention
         self.numHeads = config.numHeads
         self.numKvHeads = config.numKvHeads or config.numHeads
         self.headSize = config.nEmbd // config.numHeads
@@ -132,11 +134,22 @@ class MultiHeadAttention(nn.Module):
         q = q.transpose(1, 2)  # B, H, T, D
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        wei = q @ k.transpose(-2, -1) * (self.headSize ** -0.5)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
-        wei = F.softmax(wei, dim=-1)
-        wei = self.dropout(wei)
-        out = wei @ v
+
+        if self.useFlashAttention:
+            out = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            wei = q @ k.transpose(-2, -1) * (self.headSize ** -0.5)
+            wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+            wei = F.softmax(wei, dim=-1)
+            wei = self.dropout(wei)
+            out = wei @ v
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.proj(out)
         out = self.dropout(out)

@@ -59,7 +59,8 @@ config = GPTConfig(
     dropout=0.2,
     normType="rmsnorm",
     ffnType="swiglu",
-    useRoPE=True
+    useRoPE=True,
+    useFlashAttention=True
 
 )
 model = BigramLanguageModel(vocabularySize, blockSize, config=config)
