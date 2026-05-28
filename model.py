@@ -13,7 +13,29 @@ class GPTConfig:
     dropout: float = 0.2
     normType: str = "layernorm"
     ffnType: str = "gelu"
+    useRoPE: bool = False
 
+def rotate_half(x):
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+    x = torch.stack((-x2, x1), dim=-1)
+    return x.flatten(-2)
+
+def apply_rope(q,k):
+    B, T, headSize = q.shape
+    position = torch.arange(T, device=q.device)
+    dim = torch.arange(0, headSize, 2, device=q.device)
+    inv_freq = 1.0 / (10000 ** (dim / headSize))
+    freqs = torch.outer(position, inv_freq)
+    cos = freqs.cos()
+    sin = freqs.sin()
+    cos = torch.repeat_interleave(cos, 2, dim=-1)
+    sin = torch.repeat_interleave(sin, 2, dim=-1)
+    cos = cos.unsqueeze(0)
+    sin = sin.unsqueeze(0)
+    q = q * cos + rotate_half(q) * sin
+    k = k * cos + rotate_half(k) * sin
+    return q, k
 
 class RMSNorm(nn.Module):
     def __init__(self, nEmbd, eps=1e-6):
@@ -43,11 +65,15 @@ class Head(nn.Module):
         self.value = nn.Linear(config.nEmbd, headSize, bias=False)
         self.register_buffer('tril',torch.tril(torch.ones(config.blockSize, config.blockSize)))
         self.dropout = nn.Dropout(config.dropout)
+        self.useRoPE = config.useRoPE
     
     def forward(self, x):
         B,T,C = x.shape
         k = self.key(x)
         q = self.query(x)
+        #RoPE
+        if self.useRoPE:
+            q, k = apply_rope(q, k)
         #注意力矩阵，反应了两个token间的注意力
         wei = q @ k.transpose(-2,-1) * (self.headSize ** -0.5)
         #mask
@@ -151,11 +177,11 @@ class BigramLanguageModel(nn.Module):
             config.nEmbd
         )
 
-        #增加了位置向量
-        self.positionEmbeddingTable = nn.Embedding(
-            config.blockSize,
-            config.nEmbd
-        )
+        #增加了位置向量；现在可选是否RoPE
+        if not config.useRoPE:
+            self.positionEmbeddingTable = nn.Embedding(config.blockSize, config.nEmbd)
+        else:
+            self.positionEmbeddingTable = None
 
         self.languageModelHead = nn.Linear(
             config.nEmbd,
@@ -173,8 +199,10 @@ class BigramLanguageModel(nn.Module):
         B,T = idx.shape
         tokenEmbd = self.tokenEmbeddingTable(idx)
         #对一个batch中T个元素0——T生成位置编码
-        positionEmbd = self.positionEmbeddingTable(torch.arange(T, device=idx.device))
-        x = tokenEmbd + positionEmbd
+        x = tokenEmbd
+        if self.positionEmbeddingTable is not None:
+            positionEmbd = self.positionEmbeddingTable(torch.arange(T, device=idx.device))
+            x = x + positionEmbd
         x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.languageModelHead(x)
