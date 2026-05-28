@@ -14,6 +14,7 @@ class GPTConfig:
     normType: str = "layernorm"
     ffnType: str = "gelu"
     useRoPE: bool = False
+    numKvHeads: int = None
 
 def rotate_half(x):
     x1 = x[..., ::2]
@@ -22,7 +23,8 @@ def rotate_half(x):
     return x.flatten(-2)
 
 def apply_rope(q,k):
-    B, T, headSize = q.shape
+    _, T, _, headSize = q.shape
+    assert headSize % 2 == 0
     position = torch.arange(T, device=q.device)
     dim = torch.arange(0, headSize, 2, device=q.device)
     inv_freq = 1.0 / (10000 ** (dim / headSize))
@@ -31,11 +33,18 @@ def apply_rope(q,k):
     sin = freqs.sin()
     cos = torch.repeat_interleave(cos, 2, dim=-1)
     sin = torch.repeat_interleave(sin, 2, dim=-1)
-    cos = cos.unsqueeze(0)
-    sin = sin.unsqueeze(0)
+    cos = cos.unsqueeze(0).unsqueeze(2)
+    sin = sin.unsqueeze(0).unsqueeze(2)
     q = q * cos + rotate_half(q) * sin
     k = k * cos + rotate_half(k) * sin
     return q, k
+
+def repeat_kv(x, repeatNum):
+    if repeatNum == 1:
+        return x
+    B, T, numKvHeads, headSize = x.shape
+    x = x[:, :, :, None, :].expand(B, T, numKvHeads, repeatNum, headSize)
+    return x.reshape(B, T, numKvHeads * repeatNum, headSize)
 
 class RMSNorm(nn.Module):
     def __init__(self, nEmbd, eps=1e-6):
@@ -54,59 +63,81 @@ def build_norm(config):
     if config.normType == "rmsnorm":
         return RMSNorm(config.nEmbd)
     raise ValueError(f"不支持的 normType: {config.normType}")
-
-class Head(nn.Module):
-
-    def __init__(self, config, headSize):
-        super().__init__()
-        self.headSize = headSize
-        self.key = nn.Linear(config.nEmbd, headSize, bias=False)
-        self.query = nn.Linear(config.nEmbd, headSize, bias=False)
-        self.value = nn.Linear(config.nEmbd, headSize, bias=False)
-        self.register_buffer('tril',torch.tril(torch.ones(config.blockSize, config.blockSize)))
-        self.dropout = nn.Dropout(config.dropout)
-        self.useRoPE = config.useRoPE
     
-    def forward(self, x):
-        B,T,C = x.shape
-        k = self.key(x)
-        q = self.query(x)
-        #RoPE
-        if self.useRoPE:
-            q, k = apply_rope(q, k)
-        #注意力矩阵，反应了两个token间的注意力
-        wei = q @ k.transpose(-2,-1) * (self.headSize ** -0.5)
-        #mask
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        #softmax
-        wei = F.softmax(wei, dim=-1)
-        #dropout
-        wei = self.dropout(wei)
-        #value 聚合
-        v = self.value(x)
-        out = wei @ v
-        return out
+# 旧版单头注意力，当前 GQA 实现不再使用
+# class Head(nn.Module):
+
+#     def __init__(self, config, headSize):
+#         super().__init__()
+#         self.headSize = headSize
+#         self.key = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.query = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.value = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.register_buffer('tril',torch.tril(torch.ones(config.blockSize, config.blockSize)))
+#         self.dropout = nn.Dropout(config.dropout)
+#         self.useRoPE = config.useRoPE
+    
+#     def forward(self, x):
+#         B,T,C = x.shape
+#         k = self.key(x)
+#         q = self.query(x)
+#         #RoPE
+#         if self.useRoPE:
+#             q, k = apply_rope(q, k)
+#         #注意力矩阵，反应了两个token间的注意力
+#         wei = q @ k.transpose(-2,-1) * (self.headSize ** -0.5)
+#         #mask
+#         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+#         #softmax
+#         wei = F.softmax(wei, dim=-1)
+#         #dropout
+#         wei = self.dropout(wei)
+#         #value 聚合
+#         v = self.value(x)
+#         out = wei @ v
+#         return out
 
 #多头注意力机制
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.nEmbd % config.numHeads == 0
-        headSize = config.nEmbd // config.numHeads
-        self.heads = nn.ModuleList([
-            Head(config, headSize)
-            for _ in range(config.numHeads)
-        ])
-        self.proj = nn.Linear(
-            headSize * config.numHeads,
-            config.nEmbd
-        )
+        self.numHeads = config.numHeads
+        self.numKvHeads = config.numKvHeads or config.numHeads
+        self.headSize = config.nEmbd // config.numHeads
+        assert self.numHeads % self.numKvHeads == 0
+        self.query = nn.Linear(config.nEmbd, self.numHeads * self.headSize, bias=False)
+        self.key = nn.Linear(config.nEmbd, self.numKvHeads * self.headSize, bias=False)
+        self.value = nn.Linear(config.nEmbd, self.numKvHeads * self.headSize, bias=False)
+        self.proj = nn.Linear(config.nEmbd, config.nEmbd)
         self.dropout = nn.Dropout(config.dropout)
-    def forward(self, x):
-        out = torch.cat(
-            [h(x) for h in self.heads],
-            dim=-1
+        self.useRoPE = config.useRoPE
+        self.register_buffer(
+            "tril",
+            torch.tril(torch.ones(config.blockSize, config.blockSize))
         )
+    def forward(self, x):
+        B, T, C = x.shape
+        q = self.query(x)
+        k = self.key(x)
+        v = self.value(x)
+        q = q.view(B, T, self.numHeads, self.headSize)
+        k = k.view(B, T, self.numKvHeads, self.headSize)
+        v = v.view(B, T, self.numKvHeads, self.headSize)
+        if self.useRoPE:
+            q, k = apply_rope(q, k)
+        repeatNum = self.numHeads // self.numKvHeads
+        k = repeat_kv(k, repeatNum)
+        v = repeat_kv(v, repeatNum)
+        q = q.transpose(1, 2)  # B, H, T, D
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        wei = q @ k.transpose(-2, -1) * (self.headSize ** -0.5)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        wei = F.softmax(wei, dim=-1)
+        wei = self.dropout(wei)
+        out = wei @ v
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.proj(out)
         out = self.dropout(out)
         return out

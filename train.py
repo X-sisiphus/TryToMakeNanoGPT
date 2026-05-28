@@ -55,10 +55,12 @@ config = GPTConfig(
     nEmbd=384,
     nLayer=6,
     numHeads=6,
+    numKvHeads=2,
     dropout=0.2,
     normType="rmsnorm",
     ffnType="swiglu",
     useRoPE=True
+
 )
 model = BigramLanguageModel(vocabularySize, blockSize, config=config)
 model.to(device)
