@@ -8,16 +8,21 @@ from dataclasses import asdict
 #argparse
 def parse_args():
     parser = argparse.ArgumentParser()
+    # 数据和训练循环参数：控制上下文长度、batch 大小、训练步数和学习率。
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--block-size", type=int, default=256)
     parser.add_argument("--max-iters", type=int, default=5000)
     parser.add_argument("--eval-interval", type=int, default=100)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+
+    # 模型规模参数：这些参数会改变模型结构，通常会导致 checkpoint 彼此不兼容。
     parser.add_argument("--n-embd", type=int, default=384)
     parser.add_argument("--n-layer", type=int, default=6)
     parser.add_argument("--num-heads", type=int, default=6)
     parser.add_argument("--num-kv-heads", type=int, default=None)
     parser.add_argument("--dropout", type=float, default=0.2)
+
+    # 架构消融开关：baseline 可设为 layernorm / gelu / no-rope / no-flash / MHA。
     parser.add_argument("--norm", choices=["layernorm", "rmsnorm"], default="rmsnorm")
     parser.add_argument("--ffn", choices=["gelu", "swiglu"], default="swiglu")
     parser.add_argument("--use-rope", action="store_true")
@@ -26,12 +31,16 @@ def parse_args():
     parser.add_argument("--use-flash", dest="use_flash", action="store_true")
     parser.add_argument("--no-flash", dest="use_flash", action="store_false")
     parser.set_defaults(use_flash=True)
+
+    # 评估与实验记录参数：控制验证集评估、输出目录、断点续训和随机种子。
     parser.add_argument("--eval-iters", type=int, default=200)
     parser.add_argument("--train-ratio", type=float, default=0.9)
     parser.add_argument("--out-dir", type=str, default="out")
     parser.add_argument("--save-interval", type=int, default=1000)
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--seed", type=int, default=1337)
+
+    # 优化稳定性参数：warmup/cosine decay 控制学习率，grad clipping 限制梯度尖峰。
     parser.add_argument("--warmup-iters", type=int, default=100)
     parser.add_argument("--lr-decay-iters", type=int, default=5000)
     parser.add_argument("--min-lr", type=float, default=3e-5)
@@ -172,12 +181,12 @@ def save_checkpoint(step):
 if startStep == 0:
     with open(logPath, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["step", "train_loss", "val_loss"])
+        writer.writerow(["step", "train_loss", "val_loss", "lr"])
 
-def log_metrics(step, trainLoss, valLoss):
+def log_metrics(step, trainLoss, valLoss, lr):
     with open(logPath, "a", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([step, trainLoss, valLoss])
+        writer.writerow([step, trainLoss, valLoss, lr])
 
 def get_lr(step):
     if not args.lr_decay:
@@ -195,19 +204,24 @@ def get_lr(step):
 
 #训练
 for steps in range(startStep, maxIters):
+    lr = get_lr(steps)
+    for paramGroup in optimizer.param_groups:
+        paramGroup["lr"] = lr
     if steps > 0 and steps % args.save_interval == 0:
         save_checkpoint(steps)
     if steps % evalInterval == 0:
         losses = estimate_loss()
         print(
-            f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}",
+            f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6e}",
             flush=True
         )
-        log_metrics(steps, losses["train"], losses["val"])
+        log_metrics(steps, losses["train"], losses["val"], lr)
     xb,yb = getBatch("train")
     logits,loss = model(xb,yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
+    #梯度裁剪
+    if args.grad_clip != 0.0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
 save_checkpoint(maxIters - 1)
-
