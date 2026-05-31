@@ -220,7 +220,6 @@ class BigramLanguageModel(nn.Module):
             config.vocabSize,
             config.nEmbd
         )
-
         #增加了位置向量；现在可选是否RoPE
         if not config.useRoPE:
             self.positionEmbeddingTable = nn.Embedding(config.blockSize, config.nEmbd)
@@ -261,13 +260,23 @@ class BigramLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
         return logits,loss
     
+    def get_num_params(self):
+                return sum(p.numel() for p in self.parameters())
+
     #generate
-    def generate(self,idx,maxNewTokens):
+    def generate(self, idx, maxNewTokens, temperature=1.0, topK=None):
+        assert temperature > 0
+        if topK is not None:
+            assert topK > 0
         for _ in range(maxNewTokens):
             #剪切token
             idxCond = idx[:, -self.config.blockSize:]
             logits, loss = self(idxCond)
             logits = logits[:,-1,:]
+            logits = logits / temperature
+            if topK is not None:
+                v, _ = torch.topk(logits, min(topK, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float("Inf")
             probs = torch.softmax(logits, dim=-1)
             nextIdx = torch.multinomial(
             probs,

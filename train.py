@@ -2,6 +2,8 @@ import torch
 import os
 from model import BigramLanguageModel, GPTConfig
 import argparse
+import csv
+from dataclasses import asdict
 
 #argparse
 def parse_args():
@@ -26,9 +28,23 @@ def parse_args():
     parser.set_defaults(use_flash=True)
     parser.add_argument("--eval-iters", type=int, default=200)
     parser.add_argument("--train-ratio", type=float, default=0.9)
+    parser.add_argument("--out-dir", type=str, default="out")
+    parser.add_argument("--save-interval", type=int, default=1000)
+    parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--warmup-iters", type=int, default=100)
+    parser.add_argument("--lr-decay-iters", type=int, default=5000)
+    parser.add_argument("--min-lr", type=float, default=3e-5)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--no-lr-decay", dest="lr_decay", action="store_false")
+    parser.set_defaults(lr_decay=True)
     return parser.parse_args()
 
 args = parse_args()
+torch.manual_seed(args.seed)
+print(f"seed: {args.seed}", flush=True)
+os.makedirs(args.out_dir, exist_ok=True)
+logPath = os.path.join(args.out_dir, "log.csv")
 useMps = os.environ.get("USE_MPS") == "1"
 device = 'mps' if torch.backends.mps.is_available() and useMps else 'cpu'
 print(f"🔥 确认：正在使用 {device} 运行", flush=True)
@@ -81,28 +97,46 @@ def getBatch(split):
     x, y = x.to(device), y.to(device)
     return x,y
 
+checkpoint = None
+if args.resume is not None:
+    checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+
 #实例化
-config = GPTConfig(
-    vocabSize=vocabularySize,
-    blockSize=blockSize,
-    nEmbd=args.n_embd,
-    nLayer=args.n_layer,
-    numHeads=args.num_heads,
-    numKvHeads=args.num_kv_heads,
-    dropout=args.dropout,
-    normType=args.norm,
-    ffnType=args.ffn,
-    useRoPE=args.use_rope,
-    useFlashAttention=args.use_flash,
-)
+if checkpoint is not None and "config" in checkpoint:
+    config = GPTConfig(**checkpoint["config"])
+    blockSize = config.blockSize
+else:
+    config = GPTConfig(
+        vocabSize=vocabularySize,
+        blockSize=blockSize,
+        nEmbd=args.n_embd,
+        nLayer=args.n_layer,
+        numHeads=args.num_heads,
+        numKvHeads=args.num_kv_heads,
+        dropout=args.dropout,
+        normType=args.norm,
+        ffnType=args.ffn,
+        useRoPE=args.use_rope,
+        useFlashAttention=args.use_flash,
+    )
+assert config.vocabSize == vocabularySize
 print(config, flush=True)
-model = BigramLanguageModel(vocabularySize, blockSize, config=config)
+model = BigramLanguageModel(config.vocabSize, config.blockSize, config=config)
 model.to(device)
+numParams = model.get_num_params()
+print(f"number of parameters: {numParams / 1e6:.2f}M", flush=True)
+
 #优化器
 optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=args.learning_rate
 )
+startStep = 0
+if checkpoint is not None:
+    model.load_state_dict(checkpoint["model"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    startStep = checkpoint["step"] + 1
+    print(f"resumed from {args.resume} at step {startStep}", flush=True)
 
 @torch.no_grad()
 def estimate_loss():
@@ -118,32 +152,62 @@ def estimate_loss():
     model.train()
     return out
 
+def save_checkpoint(step):
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "config": asdict(config),
+        "args": vars(args),
+        "step": step,
+        "vocab": {
+            "stringToInt": stringToInt,
+            "intToString": intToString,
+        },
+    }
+    path = os.path.join(args.out_dir, "ckpt.pt")
+    torch.save(checkpoint, path)
+    print(f"saved checkpoint to {path}", flush=True)
+
+#初始化日志文件
+if startStep == 0:
+    with open(logPath, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["step", "train_loss", "val_loss"])
+
+def log_metrics(step, trainLoss, valLoss):
+    with open(logPath, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([step, trainLoss, valLoss])
+
+def get_lr(step):
+    if not args.lr_decay:
+        return args.learning_rate
+
+    if step < args.warmup_iters:
+        return args.learning_rate * step / args.warmup_iters
+
+    if step > args.lr_decay_iters:
+        return args.min_lr
+
+    decayRatio = (step - args.warmup_iters) / (args.lr_decay_iters - args.warmup_iters)
+    coeff = 0.5 * (1.0 + torch.cos(torch.tensor(decayRatio * 3.141592653589793)))
+    return args.min_lr + coeff.item() * (args.learning_rate - args.min_lr)
+
 #训练
-for steps in range(maxIters):
+for steps in range(startStep, maxIters):
+    if steps > 0 and steps % args.save_interval == 0:
+        save_checkpoint(steps)
     if steps % evalInterval == 0:
         losses = estimate_loss()
         print(
             f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}",
             flush=True
         )
+        log_metrics(steps, losses["train"], losses["val"])
     xb,yb = getBatch("train")
     logits,loss = model(xb,yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
+save_checkpoint(maxIters - 1)
 
-#生成
-context = torch.zeros(
-    (1,1),
-    dtype=torch.long,
-    device=device
-)
-generated = model.generate(
-    context,
-    maxNewTokens=100
-)
-print(
-    decode(
-        generated[0].tolist()
-    )
-)
