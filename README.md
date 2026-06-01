@@ -28,6 +28,7 @@
 .
 ├── model.py              # 模型结构、RoPE、GQA、采样生成、优化器分组
 ├── train.py              # 训练、验证、checkpoint、日志、学习率调度
+├── prepare_data.py       # 将原始文本预处理为 tokenizer token 缓存
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
@@ -59,6 +60,29 @@ python -m pip install -r requirements-mps.txt
 source .venv-mps/bin/activate
 python -m pip install -r requirements-mps.txt
 ```
+
+## 数据预处理
+
+第一阶段的 `train.py` 直接从 `input.txt` 构造字符级词表。第二阶段开始，需要先把原始文本离线处理成 tokenizer token 缓存：
+
+```bash
+python prepare_data.py \
+  --input input.txt \
+  --out-dir data/tiny \
+  --train-ratio 0.9 \
+  --encoding gpt2
+```
+
+输出文件：
+
+```text
+data/tiny/
+├── train.bin  # 训练 token ids
+├── val.bin    # 验证 token ids
+└── meta.json  # tokenizer、vocab_size、token 数量等元信息
+```
+
+当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。
 
 ## 快速调试训练
 
