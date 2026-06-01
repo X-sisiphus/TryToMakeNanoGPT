@@ -29,6 +29,8 @@
 ├── model.py              # 模型结构、RoPE、GQA、采样生成、优化器分组
 ├── train.py              # 训练、验证、checkpoint、日志、学习率调度
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
+├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
+├── run_ablation.py       # 批量运行结构消融实验
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -183,6 +185,45 @@ USE_MPS=1 python sample.py \
 - `temperature < 1`：生成更保守
 - `temperature > 1`：生成更发散
 - `top-k`：只从概率最高的 k 个 token 中采样
+
+## 消融实验
+
+可以用 `run_ablation.py` 批量运行多组结构对比：
+
+```bash
+python run_ablation.py \
+  --max-iters 200 \
+  --eval-interval 20 \
+  --eval-iters 5 \
+  --out-dir out/ablation
+```
+
+默认会运行：
+
+- `baseline`：LayerNorm + GELU + learned position embedding + MHA + manual attention
+- `rmsnorm`
+- `swiglu`
+- `rope`
+- `gqa`
+- `sdpa`
+
+每组实验会写入独立目录：
+
+```text
+out/ablation/
+├── baseline/
+├── rmsnorm/
+├── swiglu/
+├── rope/
+├── gqa/
+└── sdpa/
+```
+
+使用 MPS：
+
+```bash
+python run_ablation.py --use-mps --out-dir out/ablation
+```
 
 ## 输出文件
 
