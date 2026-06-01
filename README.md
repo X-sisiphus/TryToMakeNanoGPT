@@ -31,6 +31,7 @@
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── run_ablation.py       # 批量运行结构消融实验
+├── summarize_ablation.py # 汇总多组消融实验的最终指标
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -223,6 +224,18 @@ out/ablation/
 
 ```bash
 python run_ablation.py --use-mps --out-dir out/ablation
+```
+
+汇总消融实验：
+
+```bash
+python summarize_ablation.py --root out/ablation
+```
+
+会生成：
+
+```text
+out/ablation/summary.csv
 ```
 
 ## 输出文件
