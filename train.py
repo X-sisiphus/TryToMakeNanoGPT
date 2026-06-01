@@ -6,6 +6,7 @@ import csv
 from dataclasses import asdict
 import json
 import time
+import numpy as np
 
 #argparse
 def parse_args():
@@ -50,6 +51,9 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--no-lr-decay", dest="lr_decay", action="store_false")
     parser.set_defaults(lr_decay=True)
+
+    parser.add_argument("--data-dir", type=str, default=None)
+
     return parser.parse_args()
 
 args = parse_args()
@@ -60,28 +64,61 @@ logPath = os.path.join(args.out_dir, "log.csv")
 useMps = os.environ.get("USE_MPS") == "1"
 device = 'mps' if torch.backends.mps.is_available() and useMps else 'cpu'
 print(f"🔥 确认：正在使用 {device} 运行", flush=True)
-#引入文本、编码、解码
-with open("input.txt","r",encoding = "utf-8") as trainTxt:
-    text = trainTxt.read()
-chars = sorted(list(set(text)))
-vocabularySize = len(chars)
-stringToInt = {ch:i for i, ch in enumerate(chars)}
-intToString = {i:ch for i, ch in enumerate(chars)}
-def encode(s):
-    return [stringToInt[c] for c in s]
-def decode(In):
-    return ''.join([intToString[i] for i in In])
 
-#张量化
-data = torch.tensor(
-    encode(text),
-    dtype = torch.long 
-)
+if args.data_dir is not None:
+    metaPath = os.path.join(args.data_dir, "meta.json")
+    trainPath = os.path.join(args.data_dir, "train.bin")
+    valPath = os.path.join(args.data_dir, "val.bin")
 
-#拆分训练集
-n = int(args.train_ratio * len(data))
-trainData = data[:n]
-valData = data[n:]
+    with open(metaPath, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    vocabInfo = {
+        "type": "tokenizer",
+        "meta": meta,
+    }
+
+    vocabularySize = meta["vocab_size"]
+
+    trainData = torch.from_numpy(
+        np.fromfile(trainPath, dtype=np.uint16).astype(np.int64)
+    )
+    valData = torch.from_numpy(
+        np.fromfile(valPath, dtype=np.uint16).astype(np.int64)
+    )
+
+    print(f"loaded token data from {args.data_dir}", flush=True)
+    print(f"vocab size: {vocabularySize}", flush=True)
+    print(f"train tokens: {len(trainData)}", flush=True)
+    print(f"val tokens: {len(valData)}", flush=True)
+else:
+    #引入文本、编码、解码
+    with open("input.txt","r",encoding = "utf-8") as trainTxt:
+        text = trainTxt.read()
+    chars = sorted(list(set(text)))
+    vocabularySize = len(chars)
+    stringToInt = {ch:i for i, ch in enumerate(chars)}
+    intToString = {i:ch for i, ch in enumerate(chars)}
+    vocabInfo = {
+        "type": "char",
+        "stringToInt": stringToInt,
+        "intToString": intToString,
+    }
+    def encode(s):
+        return [stringToInt[c] for c in s]
+    def decode(In):
+        return ''.join([intToString[i] for i in In])
+
+    #张量化
+    data = torch.tensor(
+        encode(text),
+        dtype = torch.long 
+    )
+
+    #拆分训练集
+    n = int(args.train_ratio * len(data))
+    trainData = data[:n]
+    valData = data[n:]
 
 #构造训练样本
 blockSize = args.block_size
@@ -187,10 +224,7 @@ def save_checkpoint(step):
         "config": asdict(config),
         "args": vars(args),
         "step": step,
-        "vocab": {
-            "stringToInt": stringToInt,
-            "intToString": intToString,
-        },
+        "vocab": vocabInfo,
     }
     path = os.path.join(args.out_dir, "ckpt.pt")
     torch.save(checkpoint, path)

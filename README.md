@@ -84,6 +84,26 @@ data/tiny/
 
 当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。
 
+使用预处理后的 tokenizer 数据训练：
+
+```bash
+python train.py \
+  --data-dir data/tiny \
+  --max-iters 5 \
+  --eval-interval 1 \
+  --eval-iters 1 \
+  --batch-size 4 \
+  --block-size 16 \
+  --n-embd 48 \
+  --n-layer 1 \
+  --num-heads 4 \
+  --num-kv-heads 2 \
+  --dropout 0.0 \
+  --out-dir out/token_debug
+```
+
+传入 `--data-dir` 时，`train.py` 会从 `meta.json` 读取 `vocab_size`，并从 `train.bin` / `val.bin` 读取 token id。没有传入 `--data-dir` 时，仍然保留原来的字符级 `input.txt` 训练流程。
+
 ## 快速调试训练
 
 小模型调试命令：
