@@ -5,6 +5,7 @@ import argparse
 import csv
 from dataclasses import asdict
 import json
+import time
 
 #argparse
 def parse_args():
@@ -199,12 +200,12 @@ def save_checkpoint(step):
 if startStep == 0:
     with open(logPath, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["step", "train_loss", "val_loss", "lr"])
+        writer.writerow(["step", "train_loss", "val_loss", "lr", "tokens_per_sec"])
 
-def log_metrics(step, trainLoss, valLoss, lr):
+def log_metrics(step, trainLoss, valLoss, lr, tokensPerSec):
     with open(logPath, "a", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([step, trainLoss, valLoss, lr])
+        writer.writerow([step, trainLoss, valLoss, lr, tokensPerSec])
 
 def get_lr(step):
     if not args.lr_decay:
@@ -220,6 +221,9 @@ def get_lr(step):
     coeff = 0.5 * (1.0 + torch.cos(torch.tensor(decayRatio * 3.141592653589793)))
     return args.min_lr + coeff.item() * (args.learning_rate - args.min_lr)
 
+lastTime = time.time()
+lastEvalStep = startStep
+
 #训练
 for steps in range(startStep, maxIters):
     lr = get_lr(steps)
@@ -228,12 +232,20 @@ for steps in range(startStep, maxIters):
     if steps > 0 and steps % args.save_interval == 0:
         save_checkpoint(steps)
     if steps % evalInterval == 0:
+        now = time.time()
+        if steps == startStep:
+            tokensPerSec = 0.0
+        else:
+            trainedSteps = steps - lastEvalStep
+            tokensPerSec = trainedSteps * batchSize * blockSize / (now - lastTime)
+        lastTime = now
+        lastEvalStep = steps
         losses = estimate_loss()
         print(
-            f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6e}",
+            f"step {steps}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6e}, tok/s {tokensPerSec:.0f}",
             flush=True
         )
-        log_metrics(steps, losses["train"], losses["val"], lr)
+        log_metrics(steps, losses["train"], losses["val"], lr, tokensPerSec)
     xb,yb = getBatch("train")
     logits,loss = model(xb,yb)
     optimizer.zero_grad(set_to_none=True)
