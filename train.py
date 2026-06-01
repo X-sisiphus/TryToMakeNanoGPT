@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument("--lr-decay-iters", type=int, default=5000)
     parser.add_argument("--min-lr", type=float, default=3e-5)
     parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--no-lr-decay", dest="lr_decay", action="store_false")
     parser.set_defaults(lr_decay=True)
     return parser.parse_args()
@@ -136,9 +137,9 @@ numParams = model.get_num_params()
 print(f"number of parameters: {numParams / 1e6:.2f}M", flush=True)
 
 #优化器
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=args.learning_rate
+optimizer = model.configure_optimizers(
+    weightDecay=args.weight_decay,
+    learningRate=args.learning_rate,
 )
 startStep = 0
 if checkpoint is not None:

@@ -260,8 +260,37 @@ class BigramLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets)
         return logits,loss
     
+    def configure_optimizers(self, weightDecay, learningRate):
+        decayParams = []
+        noDecayParams = []
+
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            if param.dim() >= 2:
+                decayParams.append(param)
+            else:
+                noDecayParams.append(param)
+
+        optimGroups = [
+            {"params": decayParams, "weight_decay": weightDecay},
+            {"params": noDecayParams, "weight_decay": 0.0},
+        ]
+
+        optimizer = torch.optim.AdamW(
+            optimGroups,
+            lr=learningRate,
+        )
+
+        numDecayParams = sum(p.numel() for p in decayParams)
+        numNoDecayParams = sum(p.numel() for p in noDecayParams)
+        print(f"num decayed parameter tensors: {len(decayParams)}, with {numDecayParams:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(noDecayParams)}, with {numNoDecayParams:,} parameters")
+        return optimizer
+
     def get_num_params(self):
-                return sum(p.numel() for p in self.parameters())
+        return sum(p.numel() for p in self.parameters())
 
     #generate
     def generate(self, idx, maxNewTokens, temperature=1.0, topK=None):
