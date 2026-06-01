@@ -33,6 +33,7 @@
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
 ├── plot_ablation_summary.py # 绘制消融实验总览图
 ├── run_ablation.py       # 批量运行结构消融实验
+├── run_full_ablation.py  # 一键运行消融、汇总和绘图
 ├── summarize_ablation.py # 汇总多组消融实验的最终指标
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
@@ -226,6 +227,16 @@ out/ablation/
 
 ```bash
 python run_ablation.py --use-mps --out-dir out/ablation
+```
+
+也可以一键完成消融训练、结果汇总和绘图：
+
+```bash
+python run_full_ablation.py \
+  --out-dir out/ablation \
+  --max-iters 200 \
+  --eval-interval 20 \
+  --eval-iters 5
 ```
 
 汇总消融实验：
