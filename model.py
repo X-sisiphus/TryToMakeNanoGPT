@@ -17,15 +17,13 @@ class GPTConfig:
     numKvHeads: int = None
     useFlashAttention: bool = True
 
-
 def rotate_half(x):
     x1 = x[..., ::2]
     x2 = x[..., 1::2]
     x = torch.stack((-x2, x1), dim=-1)
     return x.flatten(-2)
 
-
-def apply_rope(q, k):
+def apply_rope(q,k):
     _, T, _, headSize = q.shape
     assert headSize % 2 == 0
     position = torch.arange(T, device=q.device)
@@ -42,15 +40,12 @@ def apply_rope(q, k):
     k = k * cos + rotate_half(k) * sin
     return q, k
 
-
 def repeat_kv(x, repeatNum):
-    # GQA/MQA 中把较少的 KV heads 扩展到 query head 数量。
     if repeatNum == 1:
         return x
     B, T, numKvHeads, headSize = x.shape
     x = x[:, :, :, None, :].expand(B, T, numKvHeads, repeatNum, headSize)
     return x.reshape(B, T, numKvHeads * repeatNum, headSize)
-
 
 class RMSNorm(nn.Module):
     def __init__(self, nEmbd, eps=1e-6):
@@ -69,8 +64,41 @@ def build_norm(config):
     if config.normType == "rmsnorm":
         return RMSNorm(config.nEmbd)
     raise ValueError(f"不支持的 normType: {config.normType}")
+    
+# 旧版单头注意力，当前 GQA 实现不再使用
+# class Head(nn.Module):
 
+#     def __init__(self, config, headSize):
+#         super().__init__()
+#         self.headSize = headSize
+#         self.key = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.query = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.value = nn.Linear(config.nEmbd, headSize, bias=False)
+#         self.register_buffer('tril',torch.tril(torch.ones(config.blockSize, config.blockSize)))
+#         self.dropout = nn.Dropout(config.dropout)
+#         self.useRoPE = config.useRoPE
+    
+#     def forward(self, x):
+#         B,T,C = x.shape
+#         k = self.key(x)
+#         q = self.query(x)
+#         #RoPE
+#         if self.useRoPE:
+#             q, k = apply_rope(q, k)
+#         #注意力矩阵，反应了两个token间的注意力
+#         wei = q @ k.transpose(-2,-1) * (self.headSize ** -0.5)
+#         #mask
+#         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
+#         #softmax
+#         wei = F.softmax(wei, dim=-1)
+#         #dropout
+#         wei = self.dropout(wei)
+#         #value 聚合
+#         v = self.value(x)
+#         out = wei @ v
+#         return out
 
+#多头注意力机制
 class MultiHeadAttention(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -90,7 +118,6 @@ class MultiHeadAttention(nn.Module):
             "tril",
             torch.tril(torch.ones(config.blockSize, config.blockSize))
         )
-
     def forward(self, x):
         B, T, C = x.shape
         q = self.query(x)
@@ -128,7 +155,7 @@ class MultiHeadAttention(nn.Module):
         out = self.dropout(out)
         return out
 
-
+#FFN
 class FeedForward(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -154,24 +181,27 @@ class FeedForward(nn.Module):
             x = self.w2(F.silu(self.w1(x)) * self.w3(x))
             return self.dropout(x)
         return self.net(x)
-
-
+#block
 class Block(nn.Module):
+
     def __init__(self, config):
         super().__init__()
 
         self.sa = MultiHeadAttention(config)
+        #前馈神经网络
         self.ffwd = FeedForward(config)
         self.ln1 = build_norm(config)
         self.ln2 = build_norm(config)
 
     def forward(self, x):
+
         x = x + self.sa(self.ln1(x))
         x = x + self.ffwd(self.ln2(x))
+
         return x
 
-
 class BigramLanguageModel(nn.Module):
+    #embedding
     def __init__(self, vocabSize, blockSize=None, config=None):
         super().__init__()
         if config is None:
@@ -179,11 +209,18 @@ class BigramLanguageModel(nn.Module):
                 blockSize = 256
             config = GPTConfig(vocabSize=vocabSize, blockSize=blockSize)
         self.config = config
-
+        #生成了一个token对应向量的表，由pytorch随机生成
+        #这里的生成的结果直接就是代表了预测值，简化了由特征到预测的过程，也可以说预测的结果本身也是一种特征
+        #self.tokenEmbeddingTable = nn.Embedding(
+        #    vocabSize,
+        #    vocabSize
+        
+        #原先的写法简化了特征,现在让embedding的结果表示语义而不是预测
         self.tokenEmbeddingTable = nn.Embedding(
             config.vocabSize,
             config.nEmbd
         )
+        #增加了位置向量；现在可选是否RoPE
         if not config.useRoPE:
             self.positionEmbeddingTable = nn.Embedding(config.blockSize, config.nEmbd)
         else:
@@ -197,10 +234,14 @@ class BigramLanguageModel(nn.Module):
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.nLayer)])
 
         self.ln_f = build_norm(config)
-
-    def forward(self, idx, targets=None):
-        B, T = idx.shape
+        
+    #forword
+    #idx是二维张量
+    def forward(self, idx, targets = None):
+        #将idx中的元素替换为对应的随机向量，将idx升维
+        B,T = idx.shape
         tokenEmbd = self.tokenEmbeddingTable(idx)
+        #对一个batch中T个元素0——T生成位置编码
         x = tokenEmbd
         if self.positionEmbeddingTable is not None:
             positionEmbd = self.positionEmbeddingTable(torch.arange(T, device=idx.device))
@@ -211,18 +252,19 @@ class BigramLanguageModel(nn.Module):
         if targets is None:
             loss = None
         else:
-            B, T, C = logits.shape
-            logits = logits.view(B * T, C)
-            targets = targets.view(B * T)
+            B,T,C = logits.shape
+            #view把原本2维的张量重新排列为一维
+            logits = logits.view(B*T,C)
+            targets = targets.view(B*T)
+            #下面的方法会先softmax，再计算loss（对数似然损失）
             loss = F.cross_entropy(logits, targets)
-        return logits, loss
-
+        return logits,loss
+    
     def configure_optimizers(self, weightDecay, learningRate):
-        # GPT 训练中常见做法：矩阵权重 decay，bias/norm 不 decay。
         decayParams = []
         noDecayParams = []
 
-        for _, param in self.named_parameters():
+        for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
 
@@ -250,22 +292,24 @@ class BigramLanguageModel(nn.Module):
     def get_num_params(self):
         return sum(p.numel() for p in self.parameters())
 
+    #generate
     def generate(self, idx, maxNewTokens, temperature=1.0, topK=None):
         assert temperature > 0
         if topK is not None:
             assert topK > 0
         for _ in range(maxNewTokens):
+            #剪切token
             idxCond = idx[:, -self.config.blockSize:]
             logits, loss = self(idxCond)
-            logits = logits[:, -1, :]
+            logits = logits[:,-1,:]
             logits = logits / temperature
             if topK is not None:
                 v, _ = torch.topk(logits, min(topK, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float("Inf")
             probs = torch.softmax(logits, dim=-1)
             nextIdx = torch.multinomial(
-                probs,
-                num_samples=1
+            probs,
+            num_samples=1
             )
-            idx = torch.cat((idx, nextIdx), dim=1)
+            idx = torch.cat((idx,nextIdx),dim=1)
         return idx

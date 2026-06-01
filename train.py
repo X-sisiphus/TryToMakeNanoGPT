@@ -60,7 +60,7 @@ logPath = os.path.join(args.out_dir, "log.csv")
 useMps = os.environ.get("USE_MPS") == "1"
 device = 'mps' if torch.backends.mps.is_available() and useMps else 'cpu'
 print(f"🔥 确认：正在使用 {device} 运行", flush=True)
-
+#引入文本、编码、解码
 with open("input.txt","r",encoding = "utf-8") as trainTxt:
     text = trainTxt.read()
 chars = sorted(list(set(text)))
@@ -69,31 +69,39 @@ stringToInt = {ch:i for i, ch in enumerate(chars)}
 intToString = {i:ch for i, ch in enumerate(chars)}
 def encode(s):
     return [stringToInt[c] for c in s]
+def decode(In):
+    return ''.join([intToString[i] for i in In])
 
+#张量化
 data = torch.tensor(
     encode(text),
     dtype = torch.long 
 )
 
+#拆分训练集
 n = int(args.train_ratio * len(data))
 trainData = data[:n]
 valData = data[n:]
 
+#构造训练样本
 blockSize = args.block_size
 batchSize = args.batch_size
 maxIters = args.max_iters
 evalInterval = args.eval_interval
-
 def getBatch(split):
     sourceData = trainData if split == "train" else valData
+    #随机四个起点
     ix = torch.randint(
         len(sourceData) - blockSize,
         (batchSize,)
     )
+    #input
+    #stack将数据由一维张量堆叠为二维，原本数据是平铺的，现在多了batch作为纵轴
     x = torch.stack([
         sourceData[i:i+blockSize]
         for i in ix
     ])
+    #target
     y = torch.stack([
         sourceData[i+1:i+blockSize+1]
         for i in ix
@@ -105,6 +113,8 @@ checkpoint = None
 if args.resume is not None:
     checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
 
+
+#实例化
 if checkpoint is not None and "config" in checkpoint:
     config = GPTConfig(**checkpoint["config"])
     blockSize = config.blockSize
@@ -144,6 +154,7 @@ numParams = model.get_num_params()
 print(f"number of parameters: {numParams / 1e6:.2f}M", flush=True)
 save_run_config()
 
+#优化器
 optimizer = model.configure_optimizers(
     weightDecay=args.weight_decay,
     learningRate=args.learning_rate,
@@ -185,6 +196,7 @@ def save_checkpoint(step):
     torch.save(checkpoint, path)
     print(f"saved checkpoint to {path}", flush=True)
 
+#初始化日志文件
 if startStep == 0:
     with open(logPath, "w", newline="") as f:
         writer = csv.writer(f)
@@ -212,6 +224,7 @@ def get_lr(step):
 lastTime = time.time()
 lastEvalStep = startStep
 
+#训练
 for steps in range(startStep, maxIters):
     lr = get_lr(steps)
     for paramGroup in optimizer.param_groups:
@@ -233,10 +246,11 @@ for steps in range(startStep, maxIters):
             flush=True
         )
         log_metrics(steps, losses["train"], losses["val"], lr, tokensPerSec)
-    xb, yb = getBatch("train")
-    logits, loss = model(xb, yb)
+    xb,yb = getBatch("train")
+    logits,loss = model(xb,yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
+    #梯度裁剪
     if args.grad_clip != 0.0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
