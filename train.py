@@ -4,6 +4,7 @@ from model import BigramLanguageModel, GPTConfig
 import argparse
 import csv
 from dataclasses import asdict
+import json
 
 #argparse
 def parse_args():
@@ -111,6 +112,7 @@ checkpoint = None
 if args.resume is not None:
     checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
 
+
 #实例化
 if checkpoint is not None and "config" in checkpoint:
     config = GPTConfig(**checkpoint["config"])
@@ -133,8 +135,23 @@ assert config.vocabSize == vocabularySize
 print(config, flush=True)
 model = BigramLanguageModel(config.vocabSize, config.blockSize, config=config)
 model.to(device)
+
+def save_run_config():
+    runConfig = {
+        "args": vars(args),
+        "config": asdict(config),
+        "num_params": numParams,
+        "device": device,
+    }
+    path = os.path.join(args.out_dir, "config.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(runConfig, f, indent=2, ensure_ascii=False)
+    print(f"saved run config to {path}", flush=True)
+
+
 numParams = model.get_num_params()
 print(f"number of parameters: {numParams / 1e6:.2f}M", flush=True)
+save_run_config()
 
 #优化器
 optimizer = model.configure_optimizers(
