@@ -6,7 +6,7 @@ import csv
 from dataclasses import asdict
 import json
 import time
-from data_loader import load_data
+from data_loader import load_data, get_batch
 
 #argparse
 def parse_args():
@@ -75,26 +75,6 @@ blockSize = args.block_size
 batchSize = args.batch_size
 maxIters = args.max_iters
 evalInterval = args.eval_interval
-def getBatch(split):
-    sourceData = trainData if split == "train" else valData
-    #随机四个起点
-    ix = torch.randint(
-        len(sourceData) - blockSize,
-        (batchSize,)
-    )
-    #input
-    #stack将数据由一维张量堆叠为二维，原本数据是平铺的，现在多了batch作为纵轴
-    x = torch.stack([
-        sourceData[i:i+blockSize]
-        for i in ix
-    ])
-    #target
-    y = torch.stack([
-        sourceData[i+1:i+blockSize+1]
-        for i in ix
-    ])
-    x, y = x.to(device), y.to(device)
-    return x,y
 
 checkpoint = None
 checkpointVocabType = None
@@ -102,7 +82,6 @@ checkpointVocabType = None
 if args.resume is not None:
     checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
     checkpointVocabType = checkpoint.get("vocab", {}).get("type", "char")
-
 
 #实例化
 if checkpoint is not None and "config" in checkpoint:
@@ -172,7 +151,14 @@ def estimate_loss():
     for split in ["train", "val"]:
         losses = torch.zeros(args.eval_iters)
         for k in range(args.eval_iters):
-            xb, yb = getBatch(split)
+            xb, yb = get_batch(
+                split,
+                trainData,
+                valData,
+                blockSize,
+                batchSize,
+                device,
+            )
             logits, loss = model(xb, yb)
             losses[k] = loss.item()
         out[split] = losses.mean().item()
@@ -242,7 +228,14 @@ for steps in range(startStep, maxIters):
             flush=True
         )
         log_metrics(steps, losses["train"], losses["val"], lr, tokensPerSec)
-    xb,yb = getBatch("train")
+    xb, yb = get_batch(
+        "train",
+        trainData,
+        valData,
+        blockSize,
+        batchSize,
+        device,
+    )
     logits,loss = model(xb,yb)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()

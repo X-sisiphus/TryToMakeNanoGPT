@@ -71,3 +71,24 @@ def load_data(dataDir=None, inputPath="input.txt", trainRatio=0.9):
         return load_token_data(dataDir)
 
     return load_char_data(inputPath, trainRatio)
+
+def get_batch(split, trainData, valData, blockSize, batchSize, device):
+    sourceData = trainData if split == "train" else valData
+
+    ix = torch.randint(
+        len(sourceData) - blockSize,
+        (batchSize,)
+    )
+
+    x = torch.stack([
+        sourceData[i:i + blockSize]
+        for i in ix
+    ])
+
+    y = torch.stack([
+        sourceData[i + 1:i + blockSize + 1]
+        for i in ix
+    ])
+
+    x, y = x.to(device), y.to(device)
+    return x, y
