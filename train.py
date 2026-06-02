@@ -53,6 +53,7 @@ def parse_args():
     parser.set_defaults(lr_decay=True)
 
     parser.add_argument("--data-dir", type=str, default=None)
+    parser.add_argument("--input", type=str, default="input.txt")
 
     return parser.parse_args()
 
@@ -67,6 +68,7 @@ print(f"🔥 确认：正在使用 {device} 运行", flush=True)
 
 trainData, valData, vocabularySize, vocabInfo = load_data(
     dataDir=args.data_dir,
+    inputPath=args.input,
     trainRatio=args.train_ratio,
 )
 

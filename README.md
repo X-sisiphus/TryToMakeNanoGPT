@@ -360,6 +360,11 @@ out/xxx/
 
 ## 重要参数
 
+数据入口：
+
+- `--input`：字符级训练时读取的原始文本文件，默认是 `input.txt`
+- `--data-dir`：读取 tokenizer 预处理后的 `train.bin`、`val.bin` 和 `meta.json`；传入后优先级高于 `--input`
+
 模型结构：
 
 - `--n-embd`：embedding 维度
