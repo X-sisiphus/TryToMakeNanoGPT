@@ -22,6 +22,11 @@ with open(args.input, "r", encoding="utf-8") as f:
 
 enc = tiktoken.get_encoding(args.encoding)
 ids = enc.encode(text)
+numChars = len(text)
+numTokens = len(ids)
+if numTokens == 0:
+    raise ValueError("输入文本没有产生任何 token，请检查 --input 文件内容。")
+charsPerToken = numChars / numTokens
 
 n = int(len(ids) * args.train_ratio)
 trainIds = ids[:n]
@@ -37,6 +42,10 @@ meta = {
     "tokenizer": "tiktoken",
     "encoding": args.encoding,
     "vocab_size": enc.n_vocab,
+    "chars": numChars,
+    "tokens": numTokens,
+    "chars_per_token": charsPerToken,
+    "train_ratio": args.train_ratio,
     "train_tokens": len(trainIds),
     "val_tokens": len(valIds),
 }
@@ -45,6 +54,9 @@ metaPath = os.path.join(args.out_dir, "meta.json")
 with open(metaPath, "w", encoding="utf-8") as f:
     json.dump(meta, f, indent=2, ensure_ascii=False)
 
+print(f"chars: {numChars}")
+print(f"tokens: {numTokens}")
+print(f"chars/token: {charsPerToken:.2f}")
 print(f"vocab_size: {enc.n_vocab}")
 print(f"train tokens: {len(trainIds)}")
 print(f"val tokens: {len(valIds)}")
