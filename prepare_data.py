@@ -30,10 +30,34 @@ def get_numpy_dtype(dtypeName, vocabSize):
 
     raise ValueError(f"不支持的 dtype: {dtypeName}")
 
+def read_text(inputPath):
+    if os.path.isfile(inputPath):
+        with open(inputPath, "r", encoding="utf-8") as f:
+            return f.read(), [inputPath]
+
+    if os.path.isdir(inputPath):
+        inputFiles = []
+        for root, _, names in os.walk(inputPath):
+            for name in names:
+                if name.endswith(".txt"):
+                    inputFiles.append(os.path.join(root, name))
+
+        inputFiles = sorted(inputFiles)
+        if len(inputFiles) == 0:
+            raise ValueError(f"目录中没有找到 .txt 文件: {inputPath}")
+
+        textParts = []
+        for path in inputFiles:
+            with open(path, "r", encoding="utf-8") as f:
+                textParts.append(f.read())
+
+        return "\n".join(textParts), inputFiles
+
+    raise FileNotFoundError(f"找不到输入路径: {inputPath}")
+
 os.makedirs(args.out_dir, exist_ok=True)
 
-with open(args.input, "r", encoding="utf-8") as f:
-    text = f.read()
+text, inputFiles = read_text(args.input)
 
 enc = tiktoken.get_encoding(args.encoding)
 ids = enc.encode(text)
@@ -57,6 +81,9 @@ np.array(trainIds, dtype=npDtype).tofile(trainPath)
 np.array(valIds, dtype=npDtype).tofile(valPath)
 
 meta = {
+    "input": args.input,
+    "num_files": len(inputFiles),
+    "files": inputFiles,
     "tokenizer": "tiktoken",
     "encoding": args.encoding,
     "vocab_size": enc.n_vocab,
@@ -76,6 +103,7 @@ with open(metaPath, "w", encoding="utf-8") as f:
 print(f"chars: {numChars}")
 print(f"tokens: {numTokens}")
 print(f"chars/token: {charsPerToken:.2f}")
+print(f"input files: {len(inputFiles)}")
 print(f"vocab_size: {enc.n_vocab}")
 print(f"train tokens: {len(trainIds)}")
 print(f"val tokens: {len(valIds)}")

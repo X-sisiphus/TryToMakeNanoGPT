@@ -76,6 +76,8 @@ python prepare_data.py \
   --dtype uint16
 ```
 
+`--input` 可以是单个 `.txt` 文件，也可以是包含多个 `.txt` 文件的目录。传入目录时，脚本会递归读取所有 `.txt` 文件，按路径排序后拼接。
+
 输出文件：
 
 ```text
@@ -87,7 +89,7 @@ data/tiny/
 
 当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 默认使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。更大的 tokenizer 可以使用 `--dtype uint32`，避免 token id 超出 `uint16` 上限。
 
-`meta.json` 会记录 tokenizer、vocab_size、dtype、字符数、token 数、`chars_per_token`、train/val token 数等信息，方便更换语料时快速检查数据规模和 tokenizer 是否正常。数据在磁盘上按 `dtype` 保存，读入训练时会转换为 `torch.long`。
+`meta.json` 会记录 input、文件数量、文件列表、tokenizer、vocab_size、dtype、字符数、token 数、`chars_per_token`、train/val token 数等信息，方便更换语料时快速检查数据规模和 tokenizer 是否正常。数据在磁盘上按 `dtype` 保存，读入训练时会转换为 `torch.long`。
 
 检查数据加载和 batch 构造：
 
