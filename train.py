@@ -6,7 +6,7 @@ import csv
 from dataclasses import asdict
 import json
 import time
-import numpy as np
+from data_loader import load_data
 
 #argparse
 def parse_args():
@@ -65,60 +65,10 @@ useMps = os.environ.get("USE_MPS") == "1"
 device = 'mps' if torch.backends.mps.is_available() and useMps else 'cpu'
 print(f"🔥 确认：正在使用 {device} 运行", flush=True)
 
-if args.data_dir is not None:
-    metaPath = os.path.join(args.data_dir, "meta.json")
-    trainPath = os.path.join(args.data_dir, "train.bin")
-    valPath = os.path.join(args.data_dir, "val.bin")
-
-    with open(metaPath, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-
-    vocabInfo = {
-        "type": "tokenizer",
-        "meta": meta,
-    }
-
-    vocabularySize = meta["vocab_size"]
-
-    trainData = torch.from_numpy(
-        np.fromfile(trainPath, dtype=np.uint16).astype(np.int64)
-    )
-    valData = torch.from_numpy(
-        np.fromfile(valPath, dtype=np.uint16).astype(np.int64)
-    )
-
-    print(f"loaded token data from {args.data_dir}", flush=True)
-    print(f"vocab size: {vocabularySize}", flush=True)
-    print(f"train tokens: {len(trainData)}", flush=True)
-    print(f"val tokens: {len(valData)}", flush=True)
-else:
-    #引入文本、编码、解码
-    with open("input.txt","r",encoding = "utf-8") as trainTxt:
-        text = trainTxt.read()
-    chars = sorted(list(set(text)))
-    vocabularySize = len(chars)
-    stringToInt = {ch:i for i, ch in enumerate(chars)}
-    intToString = {i:ch for i, ch in enumerate(chars)}
-    vocabInfo = {
-        "type": "char",
-        "stringToInt": stringToInt,
-        "intToString": intToString,
-    }
-    def encode(s):
-        return [stringToInt[c] for c in s]
-    def decode(In):
-        return ''.join([intToString[i] for i in In])
-
-    #张量化
-    data = torch.tensor(
-        encode(text),
-        dtype = torch.long 
-    )
-
-    #拆分训练集
-    n = int(args.train_ratio * len(data))
-    trainData = data[:n]
-    valData = data[n:]
+trainData, valData, vocabularySize, vocabInfo = load_data(
+    dataDir=args.data_dir,
+    trainRatio=args.train_ratio,
+)
 
 #构造训练样本
 blockSize = args.block_size

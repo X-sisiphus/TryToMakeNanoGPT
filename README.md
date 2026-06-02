@@ -28,6 +28,7 @@
 .
 ├── model.py              # 模型结构、RoPE、GQA、采样生成、优化器分组
 ├── train.py              # 训练、验证、checkpoint、日志、学习率调度
+├── data_loader.py        # 字符级数据和 tokenizer 缓存数据的统一加载入口
 ├── prepare_data.py       # 将原始文本预处理为 tokenizer token 缓存
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
