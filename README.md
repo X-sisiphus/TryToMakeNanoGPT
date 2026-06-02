@@ -72,7 +72,8 @@ python prepare_data.py \
   --input input.txt \
   --out-dir data/tiny \
   --train-ratio 0.9 \
-  --encoding gpt2
+  --encoding gpt2 \
+  --dtype uint16
 ```
 
 输出文件：
@@ -84,9 +85,9 @@ data/tiny/
 └── meta.json  # tokenizer、vocab_size、字符数、token 数量等元信息
 ```
 
-当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。
+当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 默认使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。更大的 tokenizer 可以使用 `--dtype uint32`，避免 token id 超出 `uint16` 上限。
 
-`meta.json` 会记录 tokenizer、vocab_size、字符数、token 数、`chars_per_token`、train/val token 数等信息，方便更换语料时快速检查数据规模和 tokenizer 是否正常。
+`meta.json` 会记录 tokenizer、vocab_size、dtype、字符数、token 数、`chars_per_token`、train/val token 数等信息，方便更换语料时快速检查数据规模和 tokenizer 是否正常。数据在磁盘上按 `dtype` 保存，读入训练时会转换为 `torch.long`。
 
 检查数据加载和 batch 构造：
 

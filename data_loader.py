@@ -12,11 +12,14 @@ def load_token_data(dataDir):
     with open(metaPath, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
+    dtypeName = meta.get("dtype", "uint16")
+    npDtype = np.dtype(dtypeName)
+
     trainData = torch.from_numpy(
-        np.fromfile(trainPath, dtype=np.uint16).astype(np.int64)
+        np.fromfile(trainPath, dtype=npDtype).astype(np.int64)
     )
     valData = torch.from_numpy(
-        np.fromfile(valPath, dtype=np.uint16).astype(np.int64)
+        np.fromfile(valPath, dtype=npDtype).astype(np.int64)
     )
 
     vocabularySize = meta["vocab_size"]

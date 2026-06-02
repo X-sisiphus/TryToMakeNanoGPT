@@ -12,9 +12,24 @@ def parse_args():
     parser.add_argument("--out-dir", type=str, default="data/tiny")
     parser.add_argument("--train-ratio", type=float, default=0.9)
     parser.add_argument("--encoding", type=str, default="gpt2")
+    parser.add_argument("--dtype", choices=["uint16", "uint32"], default="uint16")
     return parser.parse_args()
 
 args = parse_args()
+
+def get_numpy_dtype(dtypeName, vocabSize):
+    if dtypeName == "uint16":
+        if vocabSize > np.iinfo(np.uint16).max:
+            raise ValueError(
+                f"vocab_size={vocabSize} 超过 uint16 上限，请改用 --dtype uint32。"
+            )
+        return np.uint16
+
+    if dtypeName == "uint32":
+        return np.uint32
+
+    raise ValueError(f"不支持的 dtype: {dtypeName}")
+
 os.makedirs(args.out_dir, exist_ok=True)
 
 with open(args.input, "r", encoding="utf-8") as f:
@@ -22,6 +37,9 @@ with open(args.input, "r", encoding="utf-8") as f:
 
 enc = tiktoken.get_encoding(args.encoding)
 ids = enc.encode(text)
+
+npDtype = get_numpy_dtype(args.dtype, enc.n_vocab)
+
 numChars = len(text)
 numTokens = len(ids)
 if numTokens == 0:
@@ -35,8 +53,8 @@ valIds = ids[n:]
 trainPath = os.path.join(args.out_dir, "train.bin")
 valPath = os.path.join(args.out_dir, "val.bin")
 
-np.array(trainIds, dtype=np.uint16).tofile(trainPath)
-np.array(valIds, dtype=np.uint16).tofile(valPath)
+np.array(trainIds, dtype=npDtype).tofile(trainPath)
+np.array(valIds, dtype=npDtype).tofile(valPath)
 
 meta = {
     "tokenizer": "tiktoken",
@@ -48,6 +66,7 @@ meta = {
     "train_ratio": args.train_ratio,
     "train_tokens": len(trainIds),
     "val_tokens": len(valIds),
+    "dtype": args.dtype,
 }
 
 metaPath = os.path.join(args.out_dir, "meta.json")
@@ -61,3 +80,4 @@ print(f"vocab_size: {enc.n_vocab}")
 print(f"train tokens: {len(trainIds)}")
 print(f"val tokens: {len(valIds)}")
 print(f"saved to: {args.out_dir}")
+print(f"dtype: {args.dtype}")
