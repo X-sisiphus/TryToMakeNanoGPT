@@ -30,6 +30,7 @@
 ├── train.py              # 训练、验证、checkpoint、日志、学习率调度
 ├── data_loader.py        # 字符级数据和 tokenizer 缓存数据的统一加载入口
 ├── prepare_data.py       # 将原始文本预处理为 tokenizer token 缓存
+├── check_data_loader.py  # 检查数据加载和 causal LM batch 构造
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
@@ -84,6 +85,14 @@ data/tiny/
 ```
 
 当前默认使用 `tiktoken` 的 `gpt2` encoding，词表大小为 50257。`train.bin` 和 `val.bin` 使用 `uint16` 保存，因为 GPT-2 词表大小小于 65535。
+
+检查数据加载和 batch 构造：
+
+```bash
+python check_data_loader.py --data-dir data/tiny
+```
+
+这个脚本会同时检查 tokenizer 数据和字符级数据，并验证 causal LM 的 `x/y` 是否满足向后错一位的训练目标。
 
 使用预处理后的 tokenizer 数据训练：
 
