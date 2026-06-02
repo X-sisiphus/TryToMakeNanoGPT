@@ -4,6 +4,16 @@ import os
 import numpy as np
 import torch
 
+def get_numpy_dtype(dtypeName):
+    if dtypeName == "uint16":
+        return np.uint16
+    if dtypeName == "uint32":
+        return np.uint32
+
+    raise ValueError(
+        f"不支持的数据 dtype: {dtypeName}。请检查 meta.json，当前只支持 uint16 / uint32。"
+    )
+
 def load_token_data(dataDir):
     metaPath = os.path.join(dataDir, "meta.json")
     trainPath = os.path.join(dataDir, "train.bin")
@@ -13,7 +23,7 @@ def load_token_data(dataDir):
         meta = json.load(f)
 
     dtypeName = meta.get("dtype", "uint16")
-    npDtype = np.dtype(dtypeName)
+    npDtype = get_numpy_dtype(dtypeName)
 
     trainData = torch.from_numpy(
         np.fromfile(trainPath, dtype=npDtype).astype(np.int64)
