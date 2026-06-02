@@ -213,6 +213,7 @@ python train.py \
 ```bash
 python sample.py \
   --checkpoint out/modern/ckpt.pt \
+  --prompt "The " \
   --max-new-tokens 300 \
   --temperature 0.8 \
   --top-k 40
@@ -223,6 +224,7 @@ python sample.py \
 ```bash
 USE_MPS=1 python sample.py \
   --checkpoint out/modern/ckpt.pt \
+  --prompt "The " \
   --max-new-tokens 300 \
   --temperature 0.8 \
   --top-k 40
@@ -233,6 +235,9 @@ USE_MPS=1 python sample.py \
 - `temperature < 1`：生成更保守
 - `temperature > 1`：生成更发散
 - `top-k`：只从概率最高的 k 个 token 中采样
+- `prompt`：生成起始文本；没有传入时默认使用换行符
+
+`sample.py` 会根据 checkpoint 中保存的 `vocab.type` 自动选择解码方式：字符级 checkpoint 使用字符表，tokenizer checkpoint 使用 `tiktoken`。
 
 ## 消融实验
 

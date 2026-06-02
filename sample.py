@@ -2,12 +2,14 @@ import argparse
 import torch
 from model import BigramLanguageModel, GPTConfig
 import os
+import tiktoken
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--max-new-tokens", type=int, default=300)
     parser.add_argument("--start", type=str, default="\n")
+    parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=None)
     return parser.parse_args()
@@ -25,17 +27,36 @@ model.load_state_dict(checkpoint["model"])
 model.to(device)
 model.eval()
 print(f"number of parameters: {model.get_num_params() / 1e6:.2f}M", flush=True)
-stringToInt = checkpoint["vocab"]["stringToInt"]
-intToString = checkpoint["vocab"]["intToString"]
+vocabInfo = checkpoint["vocab"]
+vocabType = vocabInfo.get("type", "char")
+startText = args.prompt if args.prompt is not None else args.start
+print(f"vocab type: {vocabType}", flush=True)
 
-def encode(s):
-    return [stringToInt[c] for c in s]
+if vocabType == "tokenizer":
+    meta = vocabInfo["meta"]
+    enc = tiktoken.get_encoding(meta["encoding"])
 
-def decode(ids):
-    return "".join([intToString[i] for i in ids])
+    def encode(s):
+        return enc.encode(s)
+
+    def decode(ids):
+        return enc.decode(ids)
+
+elif vocabType == "char":
+    stringToInt = vocabInfo["stringToInt"]
+    intToString = vocabInfo["intToString"]
+
+    def encode(s):
+        return [stringToInt[c] for c in s]
+
+    def decode(ids):
+        return "".join([intToString[i] for i in ids])
+
+else:
+    raise ValueError(f"不支持的 vocab type: {vocabType}")
 
 context = torch.tensor(
-    [encode(args.start)],
+    [encode(startText)],
     dtype=torch.long,
     device=device,
 )
