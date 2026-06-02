@@ -206,6 +206,18 @@ python train.py \
 
 恢复时，模型结构会自动从 checkpoint 中读取，不需要重新手动指定 `n-embd`、`n-layer`、`num-heads` 等结构参数。
 
+如果恢复的是 tokenizer 数据训练得到的 checkpoint，需要同时传入对应的 `--data-dir`：
+
+```bash
+python train.py \
+  --resume out/token_debug/ckpt.pt \
+  --data-dir data/tiny \
+  --max-iters 8000 \
+  --out-dir out/token_debug
+```
+
+`--data-dir` 用来重新加载 `train.bin`、`val.bin` 和 `meta.json`。如果 tokenizer checkpoint 恢复时忘记传入 `--data-dir`，脚本会给出明确的中文错误提示。
+
 ## 生成文本
 
 训练完成后，用 `sample.py` 从 checkpoint 生成文本：

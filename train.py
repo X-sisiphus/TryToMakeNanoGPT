@@ -147,8 +147,11 @@ def getBatch(split):
     return x,y
 
 checkpoint = None
+checkpointVocabType = None
+
 if args.resume is not None:
     checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+    checkpointVocabType = checkpoint.get("vocab", {}).get("type", "char")
 
 
 #实例化
@@ -169,7 +172,16 @@ else:
         useRoPE=args.use_rope,
         useFlashAttention=args.use_flash,
     )
-assert config.vocabSize == vocabularySize
+if config.vocabSize != vocabularySize:
+    if checkpointVocabType == "tokenizer" and args.data_dir is None:
+        raise ValueError(
+            "当前 checkpoint 使用 tokenizer 词表，请传入 --data-dir 指向对应的预处理数据目录。"
+        )
+
+    raise ValueError(
+        f"vocab size 不匹配: checkpoint/config 中是 {config.vocabSize}, "
+        f"当前数据中是 {vocabularySize}。请检查 --data-dir 或训练数据是否与 checkpoint 对应。"
+    )
 print(config, flush=True)
 model = BigramLanguageModel(config.vocabSize, config.blockSize, config=config)
 model.to(device)
