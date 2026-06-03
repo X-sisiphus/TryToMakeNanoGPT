@@ -33,7 +33,14 @@ def get_numpy_dtype(dtypeName, vocabSize):
 def read_text(inputPath):
     if os.path.isfile(inputPath):
         with open(inputPath, "r", encoding="utf-8") as f:
-            return f.read(), [inputPath]
+            text = f.read()
+        manifest = [
+            {
+                "path": inputPath,
+                "chars": len(text),
+            }
+        ]
+        return text, manifest
 
     if os.path.isdir(inputPath):
         inputFiles = []
@@ -47,17 +54,27 @@ def read_text(inputPath):
             raise ValueError(f"目录中没有找到 .txt 文件: {inputPath}")
 
         textParts = []
+        manifest = []
+
         for path in inputFiles:
             with open(path, "r", encoding="utf-8") as f:
-                textParts.append(f.read())
+                part = f.read()
 
-        return "\n".join(textParts), inputFiles
+            textParts.append(part)
+            manifest.append(
+                {
+                    "path": path,
+                    "chars": len(part),
+                }
+            )
 
+        return "\n".join(textParts), manifest
     raise FileNotFoundError(f"找不到输入路径: {inputPath}")
 
 os.makedirs(args.out_dir, exist_ok=True)
 
-text, inputFiles = read_text(args.input)
+text, manifest = read_text(args.input)
+inputFiles = [item["path"] for item in manifest]
 
 enc = tiktoken.get_encoding(args.encoding)
 ids = enc.encode(text)
@@ -94,11 +111,16 @@ meta = {
     "train_tokens": len(trainIds),
     "val_tokens": len(valIds),
     "dtype": args.dtype,
+    "manifest": "manifest.json",
 }
 
 metaPath = os.path.join(args.out_dir, "meta.json")
 with open(metaPath, "w", encoding="utf-8") as f:
     json.dump(meta, f, indent=2, ensure_ascii=False)
+
+manifestPath = os.path.join(args.out_dir, "manifest.json")
+with open(manifestPath, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 print(f"chars: {numChars}")
 print(f"tokens: {numTokens}")
@@ -109,3 +131,4 @@ print(f"train tokens: {len(trainIds)}")
 print(f"val tokens: {len(valIds)}")
 print(f"saved to: {args.out_dir}")
 print(f"dtype: {args.dtype}")
+print(f"saved manifest to: {manifestPath}")
