@@ -31,6 +31,7 @@
 ├── data_loader.py        # 字符级数据和 tokenizer 缓存数据的统一加载入口
 ├── prepare_data.py       # 将原始文本预处理为 tokenizer token 缓存
 ├── check_data_loader.py  # 检查数据加载和 causal LM batch 构造
+├── inspect_tokenizer.py  # 观察 tokenizer 的 token id 和文本切片
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
@@ -432,6 +433,24 @@ out/xxx/
 - 记录数据来源、清洗规则、token 数量和平均长度
 
 这一小步完成后，项目会从“玩具字符模型”变成“可以吃真实文本数据的小型语言模型框架”。
+
+Tokenizer 观察：
+
+```bash
+python inspect_tokenizer.py --encoding gpt2
+```
+
+BPE 的核心思想是先从很小的基本符号开始，不断把语料中最常共同出现的相邻片段合并成新 token。高频英文词、常见空格加单词组合、常见数字或符号片段会更容易被合并；低频词、中文字符和专业术语可能会被拆成更多 token。
+
+当前用 GPT-2 tokenizer 观察到的现象：
+
+- `hello world` 会被切成 `hello` 和 ` world`，空格常常和后面的英文词绑定在一起
+- `Transformer` 会被切成 `Trans` 和 `former`，说明词表里不一定有完整词
+- 中文在 GPT-2 tokenizer 下会明显更碎，单个 token 解码时还可能出现替换字符
+- `GNSS time series and space geodesy` 里，常见英文片段比较稳定，`geodesy` 会被拆成多个子词
+- `RA=12h30m, Dec=+45deg` 这类领域符号串会被拆成缩写、数字和符号片段
+
+这说明 tokenizer 会影响有效上下文长度、embedding 参数量和领域文本的建模效率。后续如果进入中文天文/时空智能语料，GPT-2 tokenizer 适合学习流程，但不一定是最终训练中文领域模型的最佳选择。
 
 ### 2.2 Continued Pretraining
 
