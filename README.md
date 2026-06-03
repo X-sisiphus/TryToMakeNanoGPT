@@ -551,6 +551,8 @@ python train.py \
 
 通用小模型与 astro 小模型的采样对比记录见 [experiments/token_vs_astro_sampling.md](experiments/token_vs_astro_sampling.md)。
 
+同尺寸控制变量对比记录见 [experiments/controlled_general_vs_astro.md](experiments/controlled_general_vs_astro.md)。
+
 ### 2.3 Instruction Tuning
 
 SFT 的目标，是让模型从“续写文本”变成“按指令回答”。这个阶段可以用小规模高质量数据，不需要一开始就追大数据量。
