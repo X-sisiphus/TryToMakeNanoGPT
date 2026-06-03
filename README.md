@@ -549,6 +549,8 @@ python train.py \
 
 结论：小语料 continued pretraining 已经能把采样分布推向领域词，但 2493 tokens 太少，模型主要学到词频和局部片段，还没有稳定句法和可靠语义。这个实验更像“领域小语料过拟合/分布迁移验证”，不能说明模型具备真正的天文或时空智能能力。
 
+通用小模型与 astro 小模型的采样对比记录见 [experiments/token_vs_astro_sampling.md](experiments/token_vs_astro_sampling.md)。
+
 ### 2.3 Instruction Tuning
 
 SFT 的目标，是让模型从“续写文本”变成“按指令回答”。这个阶段可以用小规模高质量数据，不需要一开始就追大数据量。
