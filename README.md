@@ -553,6 +553,8 @@ python train.py \
 
 同尺寸控制变量对比记录见 [experiments/controlled_general_vs_astro.md](experiments/controlled_general_vs_astro.md)。
 
+扩大到 41.6K tokens 的 `astro_small_500` 实验记录见 [experiments/astro_small_500.md](experiments/astro_small_500.md)。
+
 ### 2.3 Instruction Tuning
 
 SFT 的目标，是让模型从“续写文本”变成“按指令回答”。这个阶段可以用小规模高质量数据，不需要一开始就追大数据量。
