@@ -36,6 +36,7 @@
 ├── compare_sft_samples.py # 对比 SFT 前后的 instruction 采样结果
 ├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
 ├── diagnose_next_token.py # 诊断 Answer 前后 next-token 分布和 EOS 排名
+├── evaluate_sft_quality.py # 评测 SFT 回答质量、EOS 命中和重复率
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
 ├── plot_ablation_summary.py # 绘制消融实验总览图
@@ -754,9 +755,12 @@ python train_sft.py \
 当前 `train_sft.py` 也已经支持 SFT 验证集和日志：
 
 - `--train-ratio` 控制 SFT 样本切分比例，默认 0.9
+- `--split-mode` 控制 SFT 切分方式，默认 `stratified`
 - `--eval-iters` 控制每次评估抽多少个 batch 求平均
 - 每隔 `--eval-interval` 输出 train loss 和 val loss
 - `out/sft_eval_log_debug/log.csv` 会记录 `step,train_loss,val_loss`
+
+注意：SFT 数据如果按任务顺序生成，不能直接用顺序切分。旧版 `astro_sft_small` 的顺序是 concept、field、format、qa、summary，如果直接 `train[:90%] / val[90%:]`，验证集会几乎全是 summary。当前默认使用 `stratified`，每个 task 都会按比例进入 train 和 val。
 
 一次小规模验证结果：
 
@@ -1289,6 +1293,77 @@ EOS + 正确 label 对齐：eos rate 83.33%，answer_end EOS rank 1
 ```
 
 所以当前项目可以正常用回 EOS。` END` 版可以保留为历史对照；主线推荐用 EOS，因为它是 tokenizer 原生结束符，`sample.py` 可以直接通过 `--stop-at-eos` 截断生成。
+
+分层切分重新训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --split-mode stratified \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_stratified_eos_300
+```
+
+分层切分会得到更均衡的 train/val：
+
+```text
+train tasks: {'concept_explanation': 36, 'field_extraction': 36, 'format_conversion': 36, 'qa': 36, 'summary': 36}
+val tasks: {'concept_explanation': 4, 'field_extraction': 4, 'format_conversion': 4, 'qa': 4, 'summary': 4}
+```
+
+分层训练结果：
+
+```text
+step 0: train loss 8.1069, val loss 8.4972
+step 75: train loss 6.0291, val loss 6.2559
+step 150: train loss 4.4121, val loss 4.9197
+step 225: train loss 3.2598, val loss 3.4966
+step 275: train loss 2.8882, val loss 3.0201
+```
+
+分层 EOS 诊断：
+
+```text
+answer_end avg EOS rank: 1.0
+answer_end avg EOS prob: 0.349163
+generation eos rate: 95.83% (23/24)
+avg repeated bigram ratio: 0.066
+```
+
+SFT 质量评测：
+
+新增脚本：
+
+```bash
+python evaluate_sft_quality.py \
+  --checkpoint out/sft_small_stratified_eos_300/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --split val \
+  --split-mode stratified \
+  --out-dir out/sft_quality_stratified_eos_val \
+  --temperature 0.0 \
+  --max-new-tokens 80
+```
+
+当前质量指标：
+
+```text
+examples: 20
+eos rate: 30.00%
+exact match: 0.00%
+avg token F1: 0.112
+avg target recall: 0.108
+avg char similarity: 0.158
+avg repeated bigram ratio: 0.629
+```
+
+这个结果说明：模型已经基本学会“在哪里停”，但还没有学会“答对”。下一步的主要矛盾不是 EOS，而是 SFT 数据质量、任务混合方式和模型容量。
 
 这一步把二阶段主线接起来：
 

@@ -4,6 +4,8 @@ import torch
 import tiktoken
 from dataclasses import asdict
 import csv
+import random
+from collections import Counter, defaultdict
 
 from model import BigramLanguageModel, GPTConfig
 from sft_data import load_sft_jsonl, encode_sft_example, pad_sft_batch
@@ -24,6 +26,7 @@ def parse_args():
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--eval-iters", type=int, default=20)
     parser.add_argument("--train-ratio", type=float, default=0.9)
+    parser.add_argument("--split-mode", choices=["stratified", "shuffle", "sequential"], default="stratified")
 
     # 模型结构参数
     parser.add_argument("--n-embd", type=int, default=64)
@@ -69,20 +72,57 @@ if args.init_from is not None:
 examples = load_sft_jsonl(args.sft_path)
 enc = tiktoken.get_encoding(args.encoding)
 
-encoded = [
-    encode_sft_example(example, enc)
-    for example in examples
-]
+encoded = []
+for example in examples:
+    item = encode_sft_example(example, enc)
+    item["task"] = example.get("task", "unknown")
+    encoded.append(item)
 
 encoded = [
     item for item in encoded
     if len(item["input_ids"]) <= args.block_size
 ]
 
-splitIndex = int(len(encoded) * args.train_ratio)
+def split_encoded_items(items, trainRatio, splitMode, seed):
+    rng = random.Random(seed)
 
-trainEncoded = encoded[:splitIndex]
-valEncoded = encoded[splitIndex:]
+    if splitMode == "sequential":
+        splitIndex = int(len(items) * trainRatio)
+        return items[:splitIndex], items[splitIndex:]
+
+    if splitMode == "shuffle":
+        shuffled = list(items)
+        rng.shuffle(shuffled)
+        splitIndex = int(len(shuffled) * trainRatio)
+        return shuffled[:splitIndex], shuffled[splitIndex:]
+
+    groups = defaultdict(list)
+    for item in items:
+        groups[item["task"]].append(item)
+
+    trainItems = []
+    valItems = []
+    for _, groupItems in sorted(groups.items()):
+        groupItems = list(groupItems)
+        rng.shuffle(groupItems)
+
+        splitIndex = int(len(groupItems) * trainRatio)
+        if len(groupItems) > 1:
+            splitIndex = min(max(splitIndex, 1), len(groupItems) - 1)
+
+        trainItems.extend(groupItems[:splitIndex])
+        valItems.extend(groupItems[splitIndex:])
+
+    rng.shuffle(trainItems)
+    rng.shuffle(valItems)
+    return trainItems, valItems
+
+trainEncoded, valEncoded = split_encoded_items(
+    encoded,
+    args.train_ratio,
+    args.split_mode,
+    args.seed,
+)
 
 if len(trainEncoded) == 0:
     raise ValueError("训练集为空，请检查 SFT 数据或 --train-ratio。")
@@ -103,6 +143,9 @@ print(f"avg answer tokens: {sum(answerLens) / len(answerLens):.1f}", flush=True)
 print(f"max total tokens: {max(totalLens)}", flush=True)
 print(f"train sft examples: {len(trainEncoded)}", flush=True)
 print(f"val sft examples: {len(valEncoded)}", flush=True)
+print(f"split mode: {args.split_mode}", flush=True)
+print(f"train tasks: {dict(sorted(Counter(item['task'] for item in trainEncoded).items()))}", flush=True)
+print(f"val tasks: {dict(sorted(Counter(item['task'] for item in valEncoded).items()))}", flush=True)
 
 # 2. 构造 batch
 def get_batch(split):
