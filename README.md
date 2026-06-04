@@ -684,9 +684,10 @@ python train_sft.py \
   --sft-path data/sft/astro_sft_tiny.jsonl \
   --max-iters 20 \
   --eval-interval 5 \
+  --eval-iters 3 \
   --batch-size 4 \
   --block-size 128 \
-  --out-dir out/sft_from_astro_debug
+  --out-dir out/sft_eval_log_debug
 ```
 
 这里的代码逻辑和随机初始化不同：
@@ -696,6 +697,24 @@ python train_sft.py \
 - SFT 样本通常比预训练 block 更长，所以允许用新的 `--block-size`
 - 如果 block size 改变，attention 里的 causal mask 形状会变，脚本会跳过这些不匹配的 buffer，让模型重新创建
 - prompt 部分的 label 仍然是 `-100`，只在 answer 部分计算 loss
+
+当前 `train_sft.py` 也已经支持 SFT 验证集和日志：
+
+- `--train-ratio` 控制 SFT 样本切分比例，默认 0.9
+- `--eval-iters` 控制每次评估抽多少个 batch 求平均
+- 每隔 `--eval-interval` 输出 train loss 和 val loss
+- `out/sft_eval_log_debug/log.csv` 会记录 `step,train_loss,val_loss`
+
+一次小规模验证结果：
+
+```text
+train sft examples: 27
+val sft examples: 3
+step 0: train loss 8.1701, val loss 9.5273
+step 5: train loss 8.2557, val loss 9.3438
+step 10: train loss 7.7982, val loss 9.3768
+step 15: train loss 7.1760, val loss 9.1227
+```
 
 这一步把二阶段主线接起来：
 

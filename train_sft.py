@@ -3,6 +3,7 @@ import os
 import torch
 import tiktoken
 from dataclasses import asdict
+import csv
 
 from model import BigramLanguageModel, GPTConfig
 from sft_data import load_sft_jsonl, encode_sft_example, pad_sft_batch
@@ -21,6 +22,8 @@ def parse_args():
     parser.add_argument("--max-iters", type=int, default=100)
     parser.add_argument("--eval-interval", type=int, default=10)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--eval-iters", type=int, default=20)
+    parser.add_argument("--train-ratio", type=float, default=0.9)
 
     # 模型结构参数
     parser.add_argument("--n-embd", type=int, default=64)
@@ -76,6 +79,17 @@ encoded = [
     if len(item["input_ids"]) <= args.block_size
 ]
 
+splitIndex = int(len(encoded) * args.train_ratio)
+
+trainEncoded = encoded[:splitIndex]
+valEncoded = encoded[splitIndex:]
+
+if len(trainEncoded) == 0:
+    raise ValueError("训练集为空，请检查 SFT 数据或 --train-ratio。")
+
+if len(valEncoded) == 0:
+    raise ValueError("验证集为空，请降低 --train-ratio 或增加 SFT 数据。")
+
 if len(encoded) == 0:
     raise ValueError("没有样本长度小于等于 block_size，请增大 --block-size。")
 
@@ -87,17 +101,20 @@ print(f"sft examples: {len(encoded)}", flush=True)
 print(f"avg prompt tokens: {sum(promptLens) / len(promptLens):.1f}", flush=True)
 print(f"avg answer tokens: {sum(answerLens) / len(answerLens):.1f}", flush=True)
 print(f"max total tokens: {max(totalLens)}", flush=True)
-
+print(f"train sft examples: {len(trainEncoded)}", flush=True)
+print(f"val sft examples: {len(valEncoded)}", flush=True)
 
 # 2. 构造 batch
-def get_batch():
+def get_batch(split):
+    sourceData = trainEncoded if split == "train" else valEncoded
+
     ix = torch.randint(
-        len(encoded),
+        len(sourceData),
         (args.batch_size,)
     )
 
     items = [
-        encoded[i]
+        sourceData[i]
         for i in ix
     ]
 
@@ -190,6 +207,34 @@ optimizer = model.configure_optimizers(
     learningRate=args.learning_rate,
 )
 
+logPath = os.path.join(args.out_dir, "log.csv")
+
+with open(logPath, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["step", "train_loss", "val_loss"])
+
+def log_metrics(step, trainLoss, valLoss):
+    with open(logPath, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([step, trainLoss, valLoss])
+
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+
+    for split in ["train", "val"]:
+        losses = torch.zeros(args.eval_iters)
+
+        for k in range(args.eval_iters):
+            xb, yb = get_batch(split)
+            logits, loss = model(xb, yb)
+            losses[k] = loss.item()
+
+        out[split] = losses.mean().item()
+
+    model.train()
+    return out
 
 # 5. 保存 checkpoint
 def save_checkpoint(step):
@@ -218,18 +263,26 @@ def save_checkpoint(step):
 model.train()
 
 for step in range(args.max_iters):
-    xb, yb = get_batch()
+    if step % args.eval_interval == 0:
+        losses = estimate_loss()
+
+        print(
+            f"step {step}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}",
+            flush=True,
+        )
+
+        log_metrics(
+            step,
+            losses["train"],
+            losses["val"],
+        )
+
+    xb, yb = get_batch("train")
 
     logits, loss = model(xb, yb)
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
-
-    if step % args.eval_interval == 0:
-        print(
-            f"step {step}: loss {loss.item():.4f}",
-            flush=True,
-        )
 
 save_checkpoint(args.max_iters - 1)
