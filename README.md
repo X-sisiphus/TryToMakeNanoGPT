@@ -740,6 +740,37 @@ out/sft_eval_log_debug/loss.png
 
 这张图里 train loss 下降更明显，val loss 下降较慢。由于当前验证集只有 3 条样本，这个结果只能说明链路可用，还不能作为可靠泛化结论。后续需要更多 SFT 数据和更稳定的评测集。
 
+对比 SFT 前后采样：
+
+```bash
+python compare_sft_samples.py \
+  --base-checkpoint out/astro_small_500/ckpt.pt \
+  --sft-checkpoint out/sft_eval_log_debug/ckpt.pt \
+  --out-dir out/sft_compare_samples \
+  --max-new-tokens 80 \
+  --temperature 0.8 \
+  --top-k 40
+```
+
+这个脚本会用同一组 instruction prompt 分别采样：
+
+- continued pretraining checkpoint
+- SFT checkpoint
+
+并把结果写到：
+
+```text
+out/sft_compare_samples/report.md
+```
+
+当前比较的是三类任务：
+
+- 概念解释
+- 字段抽取
+- 格式转换
+
+这一版输出还不稳定，但它建立了一个很重要的观察工具：以后只要更换更好的 SFT checkpoint，就可以直接复用同一批 prompt 观察模型行为变化。
+
 这一步把二阶段主线接起来：
 
 ```text
