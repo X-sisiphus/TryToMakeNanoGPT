@@ -716,6 +716,30 @@ step 10: train loss 7.7982, val loss 9.3768
 step 15: train loss 7.1760, val loss 9.1227
 ```
 
+绘制 SFT loss 曲线：
+
+```bash
+python plot_log.py \
+  --log out/sft_eval_log_debug/log.csv \
+  --out out/sft_eval_log_debug/loss.png
+```
+
+`plot_log.py` 同时兼容普通预训练日志和 SFT 日志，因为两者都包含：
+
+```text
+step,train_loss,val_loss
+```
+
+普通预训练日志里额外的 `lr` 和 `tokens_per_sec` 不影响画 loss 曲线。
+
+当前 SFT 曲线已经保存到：
+
+```text
+out/sft_eval_log_debug/loss.png
+```
+
+这张图里 train loss 下降更明显，val loss 下降较慢。由于当前验证集只有 3 条样本，这个结果只能说明链路可用，还不能作为可靠泛化结论。后续需要更多 SFT 数据和更稳定的评测集。
+
 这一步把二阶段主线接起来：
 
 ```text
