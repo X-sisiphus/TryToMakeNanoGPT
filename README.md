@@ -33,6 +33,8 @@
 ├── check_data_loader.py  # 检查数据加载和 causal LM batch 构造
 ├── inspect_tokenizer.py  # 观察 tokenizer 的 token id 和文本切片
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
+├── compare_sft_samples.py # 对比 SFT 前后的 instruction 采样结果
+├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
 ├── plot_ablation_summary.py # 绘制消融实验总览图
@@ -913,6 +915,56 @@ python compare_sft_samples.py \
 - 但 300 step 采样时仍然经常重复或输出空行，说明模型还没有稳定学会主动生成 EOS
 
 这不是失败，而是暴露了下一个训练问题：当前模型和数据还太小，EOS 只是“提供了停止目标”，不等于模型已经学会稳定停下。后续可以用更长训练、改进数据分布、或增加重复惩罚/贪心评估来继续排查。
+
+SFT 生成诊断：
+
+```bash
+python diagnose_sft_generation.py \
+  --checkpoint out/sft_small_eos_300/ckpt.pt \
+  --out-dir out/sft_generation_diagnostics \
+  --max-new-tokens 80 \
+  --temperatures 0.5,0.7,1.0 \
+  --top-ks 20,40 \
+  --num-samples 2
+```
+
+输出文件：
+
+```text
+out/sft_generation_diagnostics/diagnostics.csv
+out/sft_generation_diagnostics/report.md
+```
+
+诊断指标：
+
+- `eos_rate`：生成内容中是否出现 EOS
+- `empty_rate`：是否一开始就生成 EOS，导致空回答
+- `avg_completion_tokens`：EOS 截断后的平均回答长度
+- `repeat_bigram_ratio`：重复 bigram 占比，越高说明越容易陷入重复
+- `max_token_run`：同一个 token 连续重复的最长长度
+
+当前诊断结果：
+
+```text
+total samples: 36
+eos rate: 0.00% (0/36)
+empty completion rate: 0.00% (0/36)
+avg completion tokens: 80.0
+avg repeated bigram ratio: 0.922
+max repeated token run: 80
+```
+
+按采样参数看：
+
+```text
+temperature 0.5, top_k 20/40: repeated bigram ratio 0.987
+temperature 0.7, top_k 20:    repeated bigram ratio 0.968
+temperature 0.7, top_k 40:    repeated bigram ratio 0.956
+temperature 1.0, top_k 20:    repeated bigram ratio 0.833
+temperature 1.0, top_k 40:    repeated bigram ratio 0.802
+```
+
+结论：调高 temperature 可以稍微降低重复，但 EOS 仍然完全没有被稳定生成。低 temperature/top-k 会把模型压到最高概率 token 上，反而更容易变成纯换行或同词重复。下一步应该先做重复惩罚或 greedy 对照，再考虑是否继续延长 SFT 训练。
 
 这一步把二阶段主线接起来：
 
