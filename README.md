@@ -676,6 +676,33 @@ python train_sft.py \
 
 这一步只验证 SFT 训练链路能跑通。当前 `train_sft.py` 是从随机初始化模型开始训练，20 step 后采样仍然接近随机文本是正常的。真正有意义的 SFT 应该从 continued pretraining checkpoint 初始化，或者使用更大的高质量 SFT 数据。
 
+从 continued pretraining checkpoint 初始化 SFT：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_tiny.jsonl \
+  --max-iters 20 \
+  --eval-interval 5 \
+  --batch-size 4 \
+  --block-size 128 \
+  --out-dir out/sft_from_astro_debug
+```
+
+这里的代码逻辑和随机初始化不同：
+
+- `--init-from` 会读取预训练 checkpoint 中的模型结构和参数
+- SFT 仍然使用 `gpt2` tokenizer，因此会检查 checkpoint 词表大小是否匹配
+- SFT 样本通常比预训练 block 更长，所以允许用新的 `--block-size`
+- 如果 block size 改变，attention 里的 causal mask 形状会变，脚本会跳过这些不匹配的 buffer，让模型重新创建
+- prompt 部分的 label 仍然是 `-100`，只在 answer 部分计算 loss
+
+这一步把二阶段主线接起来：
+
+```text
+领域文本 continued pretraining -> 指令样本 SFT -> 后续 DPO / 评测
+```
+
 ### 2.4 偏好优化：DPO / GRPO
 
 在 SFT 之后，可以进入偏好优化。这个阶段不建议一开始就追复杂 RLHF，而是先理解 DPO。

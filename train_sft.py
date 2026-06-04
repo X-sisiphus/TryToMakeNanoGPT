@@ -32,6 +32,7 @@ def parse_args():
     # 实验记录参数
     parser.add_argument("--out-dir", type=str, default="out/sft_debug")
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--init-from", type=str, default=None)
 
     return parser.parse_args()
 
@@ -49,6 +50,16 @@ print(f"using device: {device}", flush=True)
 print(f"sft path: {args.sft_path}", flush=True)
 print(f"encoding: {args.encoding}", flush=True)
 print(f"out dir: {args.out_dir}", flush=True)
+print(f"init from: {args.init_from}", flush=True)
+
+checkpoint = None
+
+if args.init_from is not None:
+    checkpoint = torch.load(
+        args.init_from,
+        map_location="cpu",
+        weights_only=False,
+    )
 
 
 # 1. 加载并编码 SFT 数据
@@ -99,19 +110,30 @@ def get_batch():
 
 
 # 3. 构造模型
-config = GPTConfig(
-    vocabSize=enc.n_vocab,
-    blockSize=args.block_size,
-    nEmbd=args.n_embd,
-    nLayer=args.n_layer,
-    numHeads=args.num_heads,
-    numKvHeads=args.num_kv_heads,
-    dropout=args.dropout,
-    normType="rmsnorm",
-    ffnType="swiglu",
-    useRoPE=True,
-    useFlashAttention=True,
-)
+if checkpoint is not None:
+    config = GPTConfig(**checkpoint["config"])
+
+    if config.vocabSize != enc.n_vocab:
+        raise ValueError(
+            f"checkpoint vocabSize={config.vocabSize}, "
+            f"当前 tokenizer vocabSize={enc.n_vocab}，词表不匹配。"
+        )
+
+    config.blockSize = args.block_size
+else:
+    config = GPTConfig(
+        vocabSize=enc.n_vocab,
+        blockSize=args.block_size,
+        nEmbd=args.n_embd,
+        nLayer=args.n_layer,
+        numHeads=args.num_heads,
+        numKvHeads=args.num_kv_heads,
+        dropout=args.dropout,
+        normType="rmsnorm",
+        ffnType="swiglu",
+        useRoPE=True,
+        useFlashAttention=True,
+    )
 
 print(config, flush=True)
 
@@ -120,6 +142,41 @@ model = BigramLanguageModel(
     config.blockSize,
     config=config,
 )
+
+def load_matching_weights(model, checkpointModel):
+    modelState = model.state_dict()
+    filteredState = {}
+    skippedKeys = []
+
+    for key, value in checkpointModel.items():
+        if key in modelState and modelState[key].shape == value.shape:
+            filteredState[key] = value
+        else:
+            skippedKeys.append(key)
+
+    missingKeys, unexpectedKeys = model.load_state_dict(
+        filteredState,
+        strict=False,
+    )
+
+    print(f"loaded checkpoint tensors: {len(filteredState)}", flush=True)
+
+    if skippedKeys:
+        print("skipped checkpoint tensors because shape changed:", flush=True)
+        for key in skippedKeys:
+            print(f"  {key}", flush=True)
+
+    if unexpectedKeys:
+        print("unexpected checkpoint tensors:", flush=True)
+        for key in unexpectedKeys:
+            print(f"  {key}", flush=True)
+
+    if missingKeys:
+        print(f"missing tensors initialized from current model: {len(missingKeys)}", flush=True)
+
+
+if checkpoint is not None:
+    load_matching_weights(model, checkpoint["model"])
 
 model.to(device)
 
@@ -140,6 +197,7 @@ def save_checkpoint(step):
         "model": model.state_dict(),
         "config": asdict(config),
         "args": vars(args),
+        "init_from": args.init_from,
         "step": step,
         "vocab": {
             "type": "tokenizer",
