@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=120)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
     return parser.parse_args()
 
@@ -51,6 +52,7 @@ def run_sample(checkpoint, prompt, args):
         "--max-new-tokens", str(args.max_new_tokens),
         "--temperature", str(args.temperature),
         "--top-k", str(args.top_k),
+        "--repetition-penalty", str(args.repetition_penalty),
     ]
 
     if args.stop_at_eos:

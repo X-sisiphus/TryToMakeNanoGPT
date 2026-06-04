@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=80)
     parser.add_argument("--temperatures", type=str, default="0.5,0.7,1.0")
     parser.add_argument("--top-ks", type=str, default="20,40")
+    parser.add_argument("--repetition-penalties", type=str, default="1.0")
     parser.add_argument("--num-samples", type=int, default=2)
     parser.add_argument("--seed", type=int, default=1337)
     return parser.parse_args()
@@ -115,7 +116,7 @@ def repeated_ngram_ratio(tokenIds, n):
     return repeated / len(ngrams)
 
 
-def diagnose_sample(model, enc, prompt, temperature, topK, maxNewTokens, device):
+def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, maxNewTokens, device):
     promptIds = enc.encode(prompt)
     context = torch.tensor([promptIds], dtype=torch.long, device=device)
 
@@ -125,6 +126,8 @@ def diagnose_sample(model, enc, prompt, temperature, topK, maxNewTokens, device)
             maxNewTokens,
             temperature=temperature,
             topK=topK,
+            repetitionPenalty=repetitionPenalty,
+            repetitionStart=len(promptIds),
         )
 
     generatedIds = generated[0].tolist()
@@ -182,11 +185,11 @@ def summarize_by_setting(rows):
     groups = {}
 
     for row in rows:
-        key = (row["temperature"], row["top_k"])
+        key = (row["temperature"], row["top_k"], row["repetition_penalty"])
         groups.setdefault(key, []).append(row)
 
     summaryRows = []
-    for (temperature, topK), items in sorted(groups.items()):
+    for (temperature, topK, repetitionPenalty), items in sorted(groups.items()):
         total = len(items)
         eosCount = sum(1 for row in items if row["hit_eos"])
         emptyCount = sum(1 for row in items if row["completion_tokens"] == 0)
@@ -198,6 +201,7 @@ def summarize_by_setting(rows):
             {
                 "temperature": temperature,
                 "top_k": topK,
+                "repetition_penalty": repetitionPenalty,
                 "total": total,
                 "eos_rate": eosCount / total,
                 "empty_rate": emptyCount / total,
@@ -227,6 +231,7 @@ def write_outputs(args, rows, summary):
         "prompt_name",
         "temperature",
         "top_k",
+        "repetition_penalty",
         "sample_id",
         "hit_eos",
         "eos_step",
@@ -275,11 +280,12 @@ def write_outputs(args, rows, summary):
         f.write(f"- max repeated token run: {summary['max_token_run']}\n\n")
 
         f.write("## By Sampling Setting\n\n")
-        f.write("| temperature | top_k | eos rate | empty rate | avg length | avg repeated bigram | max token run |\n")
-        f.write("| --- | --- | ---: | ---: | ---: | ---: | ---: |\n")
+        f.write("| temperature | top_k | repetition penalty | eos rate | empty rate | avg length | avg repeated bigram | max token run |\n")
+        f.write("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
         for row in settingSummaryRows:
             f.write(
                 f"| {row['temperature']} | {row['top_k']} | "
+                f"{row['repetition_penalty']} | "
                 f"{row['eos_rate']:.2%} | {row['empty_rate']:.2%} | "
                 f"{row['avg_completion_tokens']:.1f} | "
                 f"{row['avg_repeat_bigram_ratio']:.3f} | "
@@ -291,7 +297,8 @@ def write_outputs(args, rows, summary):
         for row in worstRows:
             f.write(
                 f"### {row['prompt_name']} | temp={row['temperature']} | "
-                f"top_k={row['top_k']} | sample={row['sample_id']}\n\n"
+                f"top_k={row['top_k']} | penalty={row['repetition_penalty']} | "
+                f"sample={row['sample_id']}\n\n"
             )
             f.write(
                 f"- hit_eos: {row['hit_eos']}\n"
@@ -316,6 +323,7 @@ def main():
     args = parse_args()
     temperatures = parse_float_list(args.temperatures)
     topKs = parse_top_k_list(args.top_ks)
+    repetitionPenalties = parse_float_list(args.repetition_penalties)
 
     useMps = os.environ.get("USE_MPS") == "1"
     device = "mps" if torch.backends.mps.is_available() and useMps else "cpu"
@@ -327,30 +335,34 @@ def main():
     for promptName, prompt in PROMPTS:
         for temperature in temperatures:
             for topK in topKs:
-                for sampleId in range(args.num_samples):
-                    torch.manual_seed(args.seed + len(rows))
-                    print(
-                        f"diagnosing: {promptName}, temp={temperature}, top_k={topK}, sample={sampleId}",
-                        flush=True,
-                    )
-                    metrics = diagnose_sample(
-                        model,
-                        enc,
-                        prompt,
-                        temperature,
-                        topK,
-                        args.max_new_tokens,
-                        device,
-                    )
-                    rows.append(
-                        {
-                            "prompt_name": promptName,
-                            "temperature": temperature,
-                            "top_k": topK if topK is not None else "none",
-                            "sample_id": sampleId,
-                            **metrics,
-                        }
-                    )
+                for repetitionPenalty in repetitionPenalties:
+                    for sampleId in range(args.num_samples):
+                        torch.manual_seed(args.seed + len(rows))
+                        print(
+                            f"diagnosing: {promptName}, temp={temperature}, top_k={topK}, "
+                            f"penalty={repetitionPenalty}, sample={sampleId}",
+                            flush=True,
+                        )
+                        metrics = diagnose_sample(
+                            model,
+                            enc,
+                            prompt,
+                            temperature,
+                            topK,
+                            repetitionPenalty,
+                            args.max_new_tokens,
+                            device,
+                        )
+                        rows.append(
+                            {
+                                "prompt_name": promptName,
+                                "temperature": temperature,
+                                "top_k": topK if topK is not None else "none",
+                                "repetition_penalty": repetitionPenalty,
+                                "sample_id": sampleId,
+                                **metrics,
+                            }
+                        )
 
     summary = summarize(rows)
     write_outputs(args, rows, summary)

@@ -293,8 +293,18 @@ class BigramLanguageModel(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
     #generate
-    def generate(self, idx, maxNewTokens, temperature=1.0, topK=None):
+    def generate(
+        self,
+        idx,
+        maxNewTokens,
+        temperature=1.0,
+        topK=None,
+        repetitionPenalty=1.0,
+        repetitionStart=0,
+    ):
         assert temperature > 0
+        assert repetitionPenalty >= 1.0
+        assert repetitionStart >= 0
         if topK is not None:
             assert topK > 0
         for _ in range(maxNewTokens):
@@ -302,6 +312,17 @@ class BigramLanguageModel(nn.Module):
             idxCond = idx[:, -self.config.blockSize:]
             logits, loss = self(idxCond)
             logits = logits[:,-1,:]
+            if repetitionPenalty > 1.0:
+                for batchIdx in range(idx.size(0)):
+                    seenTokens = torch.unique(idx[batchIdx, repetitionStart:])
+                    if seenTokens.numel() == 0:
+                        continue
+                    seenLogits = logits[batchIdx, seenTokens]
+                    logits[batchIdx, seenTokens] = torch.where(
+                        seenLogits < 0,
+                        seenLogits * repetitionPenalty,
+                        seenLogits / repetitionPenalty,
+                    )
             logits = logits / temperature
             if topK is not None:
                 v, _ = torch.topk(logits, min(topK, logits.size(-1)))

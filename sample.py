@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=None)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
     return parser.parse_args()
 
@@ -70,6 +71,8 @@ with torch.no_grad():
         args.max_new_tokens,
         temperature=args.temperature,
         topK=args.top_k,
+        repetitionPenalty=args.repetition_penalty,
+        repetitionStart=context.shape[1],
     )
 
 generatedIds = generated[0].tolist()

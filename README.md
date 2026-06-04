@@ -16,7 +16,7 @@
 - checkpoint 保存与恢复
 - resume 时自动从 checkpoint 恢复模型结构
 - CSV 训练日志
-- temperature 与 top-k 采样
+- temperature / top-k / repetition penalty 采样
 - learning rate warmup + cosine decay
 - gradient clipping
 - weight decay 参数分组
@@ -247,7 +247,8 @@ python sample.py \
   --prompt "The " \
   --max-new-tokens 300 \
   --temperature 0.8 \
-  --top-k 40
+  --top-k 40 \
+  --repetition-penalty 1.0
 ```
 
 使用 MPS：
@@ -258,7 +259,8 @@ USE_MPS=1 python sample.py \
   --prompt "The " \
   --max-new-tokens 300 \
   --temperature 0.8 \
-  --top-k 40
+  --top-k 40 \
+  --repetition-penalty 1.0
 ```
 
 说明：
@@ -266,6 +268,7 @@ USE_MPS=1 python sample.py \
 - `temperature < 1`：生成更保守
 - `temperature > 1`：生成更发散
 - `top-k`：只从概率最高的 k 个 token 中采样
+- `repetition-penalty > 1`：降低已出现 token 再次被采样的概率，缓解重复
 - `prompt`：生成起始文本；没有传入时默认使用换行符
 
 `sample.py` 会根据 checkpoint 中保存的 `vocab.type` 自动选择解码方式：字符级 checkpoint 使用字符表，tokenizer checkpoint 使用 `tiktoken`。
@@ -412,7 +415,7 @@ out/xxx/
 6. 将手写 attention 扩展为 PyTorch SDPA
 7. 加入 train / validation split 和 loss 评估
 8. 加入 checkpoint 保存、恢复训练和结构配置自动恢复
-9. 加入独立 `sample.py`，支持 temperature 和 top-k 采样
+9. 加入独立 `sample.py`，支持 temperature、top-k 和 repetition penalty 采样
 10. 加入 seed、训练日志、学习率调度、梯度裁剪、weight decay 参数分组
 11. 加入消融实验、结果汇总和可视化脚本
 
@@ -965,6 +968,43 @@ temperature 1.0, top_k 40:    repeated bigram ratio 0.802
 ```
 
 结论：调高 temperature 可以稍微降低重复，但 EOS 仍然完全没有被稳定生成。低 temperature/top-k 会把模型压到最高概率 token 上，反而更容易变成纯换行或同词重复。下一步应该先做重复惩罚或 greedy 对照，再考虑是否继续延长 SFT 训练。
+
+重复惩罚采样：
+
+```bash
+python sample.py \
+  --checkpoint out/sft_small_eos_300/ckpt.pt \
+  --prompt $'Instruction:\nConvert the observation into a compact JSON object.\n\nInput:\nVLBI baseline residual: station=WETTZELL, delay=12 ps, band=X.\n\nAnswer:\n' \
+  --max-new-tokens 80 \
+  --temperature 1.0 \
+  --top-k 40 \
+  --repetition-penalty 2.0 \
+  --stop-at-eos
+```
+
+对 repetition penalty 做诊断：
+
+```bash
+python diagnose_sft_generation.py \
+  --checkpoint out/sft_small_eos_300/ckpt.pt \
+  --out-dir out/sft_generation_penalty_diagnostics \
+  --max-new-tokens 80 \
+  --temperatures 0.7,1.0 \
+  --top-ks 40 \
+  --repetition-penalties 1.0,1.2,1.5,2.0 \
+  --num-samples 2
+```
+
+当前诊断结果：
+
+```text
+penalty 1.0: eos 0/12, avg repeated bigram 0.865, max token run 80
+penalty 1.2: eos 0/12, avg repeated bigram 0.712, max token run 58
+penalty 1.5: eos 0/12, avg repeated bigram 0.369, max token run 29
+penalty 2.0: eos 0/12, avg repeated bigram 0.064, max token run 9
+```
+
+结论：repetition penalty 能显著降低重复，但没有让模型学会生成 EOS，也没有让回答真正变正确。它是一个解码层面的缓解工具，不是训练质量的根因修复。下一步更应该做 greedy 对照和 EOS 概率诊断，确认模型在 `Answer:` 后到底把哪些 token 排在前面。
 
 这一步把二阶段主线接起来：
 
