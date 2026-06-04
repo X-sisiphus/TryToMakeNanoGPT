@@ -632,6 +632,23 @@ python check_sft_encoding.py \
 - prompt 部分 labels 使用 `-100`，不参与 loss
 - answer 部分 labels 等于目标 token id，用于 SFT 训练
 
+Batch padding 检查：
+
+```bash
+python check_sft_batch.py \
+  --path data/sft/astro_sft_tiny.jsonl \
+  --encoding gpt2 \
+  --batch-size 4
+```
+
+当前检查结果：
+
+- `input_ids` shape: `(4, 62)`
+- `labels` shape: `(4, 62)`
+- `attention_mask` shape: `(4, 62)`
+- `input_ids` padding 使用 `PAD_TOKEN_ID=0`
+- `labels` padding 使用 `-100`，避免 padding token 参与 loss
+
 ### 2.4 偏好优化：DPO / GRPO
 
 在 SFT 之后，可以进入偏好优化。这个阶段不建议一开始就追复杂 RLHF，而是先理解 DPO。

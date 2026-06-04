@@ -1,4 +1,5 @@
 import json
+import torch
 
 def format_sft_example(example):
     instruction = example["instruction"].strip()
@@ -18,7 +19,7 @@ def format_sft_example(example):
     return prompt, answer
 
 IGNORE_INDEX = -100
-
+PAD_TOKEN_ID = 0
 
 def encode_sft_example(example, enc):
     prompt, answer = format_sft_example(example)
@@ -46,3 +47,25 @@ def load_sft_jsonl(path):
             if line:
                 examples.append(json.loads(line))
     return examples
+
+def pad_sft_batch(items, padTokenId=PAD_TOKEN_ID):
+    maxLen = max(len(item["input_ids"]) for item in items)
+
+    inputIds = []
+    labels = []
+    attentionMask = []
+
+    for item in items:
+        ids = item["input_ids"]
+        itemLabels = item["labels"]
+        padLen = maxLen - len(ids)
+
+        inputIds.append(ids + [padTokenId] * padLen)
+        labels.append(itemLabels + [IGNORE_INDEX] * padLen)
+        attentionMask.append([1] * len(ids) + [0] * padLen)
+
+    return {
+        "input_ids": torch.tensor(inputIds, dtype=torch.long),
+        "labels": torch.tensor(labels, dtype=torch.long),
+        "attention_mask": torch.tensor(attentionMask, dtype=torch.long),
+    }
