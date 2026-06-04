@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
+    parser.add_argument("--stop-at-text", type=str, default=None)
     return parser.parse_args()
 
 PROMPTS = [
@@ -57,6 +58,9 @@ def run_sample(checkpoint, prompt, args):
 
     if args.stop_at_eos:
         cmd.append("--stop-at-eos")
+
+    if args.stop_at_text is not None:
+        cmd.extend(["--stop-at-text", args.stop_at_text])
 
     result = subprocess.run(
         cmd,

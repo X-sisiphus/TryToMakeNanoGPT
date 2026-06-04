@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
+    parser.add_argument("--stop-at-text", type=str, default=None)
     return parser.parse_args()
 
 args = parse_args()
@@ -85,4 +86,9 @@ if args.stop_at_eos and eosId is not None:
         eosPos = generatedIds.index(eosId, promptLen)
         generatedIds = generatedIds[:eosPos]
 
-print(decode(generatedIds))
+text = decode(generatedIds)
+
+if args.stop_at_text is not None and args.stop_at_text in text:
+    text = text.split(args.stop_at_text)[0]
+
+print(text)

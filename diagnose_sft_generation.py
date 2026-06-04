@@ -61,6 +61,7 @@ def parse_args():
     parser.add_argument("--temperatures", type=str, default="0.5,0.7,1.0")
     parser.add_argument("--top-ks", type=str, default="20,40")
     parser.add_argument("--repetition-penalties", type=str, default="1.0")
+    parser.add_argument("--stop-text", type=str, default=None)
     parser.add_argument("--num-samples", type=int, default=2)
     parser.add_argument("--seed", type=int, default=1337)
     return parser.parse_args()
@@ -116,7 +117,7 @@ def repeated_ngram_ratio(tokenIds, n):
     return repeated / len(ngrams)
 
 
-def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, maxNewTokens, device):
+def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, stopText, maxNewTokens, device):
     promptIds = enc.encode(prompt)
     context = torch.tensor([promptIds], dtype=torch.long, device=device)
 
@@ -137,6 +138,8 @@ def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, ma
     hitEos = eosId in newIds
     eosStep = None
     completionIds = newIds
+    hitStopText = False
+    stopTextCharPos = None
 
     if hitEos:
         eosIndex = newIds.index(eosId)
@@ -144,11 +147,19 @@ def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, ma
         completionIds = newIds[:eosIndex]
 
     completionText = enc.decode(completionIds)
+    if stopText is not None and stopText in completionText:
+        hitStopText = True
+        stopTextCharPos = completionText.find(stopText)
+        completionText = completionText[:stopTextCharPos]
+        completionIds = enc.encode(completionText)
+
     uniqueRatio = len(set(completionIds)) / len(completionIds) if completionIds else 0.0
 
     return {
         "hit_eos": hitEos,
         "eos_step": eosStep,
+        "hit_stop_text": hitStopText,
+        "stop_text_char_pos": stopTextCharPos,
         "generated_tokens": len(newIds),
         "completion_tokens": len(completionIds),
         "unique_token_ratio": uniqueRatio,
@@ -162,6 +173,7 @@ def diagnose_sample(model, enc, prompt, temperature, topK, repetitionPenalty, ma
 def summarize(rows):
     total = len(rows)
     eosCount = sum(1 for row in rows if row["hit_eos"])
+    stopTextCount = sum(1 for row in rows if row["hit_stop_text"])
     emptyCount = sum(1 for row in rows if row["completion_tokens"] == 0)
     avgLen = sum(row["completion_tokens"] for row in rows) / total
     avgUnique = sum(row["unique_token_ratio"] for row in rows) / total
@@ -172,6 +184,8 @@ def summarize(rows):
         "total": total,
         "eos_count": eosCount,
         "eos_rate": eosCount / total,
+        "stop_text_count": stopTextCount,
+        "stop_text_rate": stopTextCount / total,
         "empty_count": emptyCount,
         "empty_rate": emptyCount / total,
         "avg_completion_tokens": avgLen,
@@ -192,6 +206,7 @@ def summarize_by_setting(rows):
     for (temperature, topK, repetitionPenalty), items in sorted(groups.items()):
         total = len(items)
         eosCount = sum(1 for row in items if row["hit_eos"])
+        stopTextCount = sum(1 for row in items if row["hit_stop_text"])
         emptyCount = sum(1 for row in items if row["completion_tokens"] == 0)
         avgLen = sum(row["completion_tokens"] for row in items) / total
         avgBigramRepeat = sum(row["repeat_bigram_ratio"] for row in items) / total
@@ -204,6 +219,7 @@ def summarize_by_setting(rows):
                 "repetition_penalty": repetitionPenalty,
                 "total": total,
                 "eos_rate": eosCount / total,
+                "stop_text_rate": stopTextCount / total,
                 "empty_rate": emptyCount / total,
                 "avg_completion_tokens": avgLen,
                 "avg_repeat_bigram_ratio": avgBigramRepeat,
@@ -235,6 +251,8 @@ def write_outputs(args, rows, summary):
         "sample_id",
         "hit_eos",
         "eos_step",
+        "hit_stop_text",
+        "stop_text_char_pos",
         "generated_tokens",
         "completion_tokens",
         "unique_token_ratio",
@@ -273,6 +291,8 @@ def write_outputs(args, rows, summary):
         f.write("## Summary\n\n")
         f.write(f"- total samples: {summary['total']}\n")
         f.write(f"- eos rate: {summary['eos_rate']:.2%} ({summary['eos_count']}/{summary['total']})\n")
+        if args.stop_text is not None:
+            f.write(f"- stop-text rate: {summary['stop_text_rate']:.2%} ({summary['stop_text_count']}/{summary['total']})\n")
         f.write(f"- empty completion rate: {summary['empty_rate']:.2%} ({summary['empty_count']}/{summary['total']})\n")
         f.write(f"- avg completion tokens: {summary['avg_completion_tokens']:.1f}\n")
         f.write(f"- avg unique token ratio: {summary['avg_unique_token_ratio']:.3f}\n")
@@ -280,13 +300,14 @@ def write_outputs(args, rows, summary):
         f.write(f"- max repeated token run: {summary['max_token_run']}\n\n")
 
         f.write("## By Sampling Setting\n\n")
-        f.write("| temperature | top_k | repetition penalty | eos rate | empty rate | avg length | avg repeated bigram | max token run |\n")
-        f.write("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+        f.write("| temperature | top_k | repetition penalty | eos rate | stop-text rate | empty rate | avg length | avg repeated bigram | max token run |\n")
+        f.write("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
         for row in settingSummaryRows:
             f.write(
                 f"| {row['temperature']} | {row['top_k']} | "
                 f"{row['repetition_penalty']} | "
-                f"{row['eos_rate']:.2%} | {row['empty_rate']:.2%} | "
+                f"{row['eos_rate']:.2%} | {row['stop_text_rate']:.2%} | "
+                f"{row['empty_rate']:.2%} | "
                 f"{row['avg_completion_tokens']:.1f} | "
                 f"{row['avg_repeat_bigram_ratio']:.3f} | "
                 f"{row['max_token_run']} |\n"
@@ -303,6 +324,8 @@ def write_outputs(args, rows, summary):
             f.write(
                 f"- hit_eos: {row['hit_eos']}\n"
                 f"- eos_step: {row['eos_step']}\n"
+                f"- hit_stop_text: {row['hit_stop_text']}\n"
+                f"- stop_text_char_pos: {row['stop_text_char_pos']}\n"
                 f"- completion_tokens: {row['completion_tokens']}\n"
                 f"- repeat_bigram_ratio: {row['repeat_bigram_ratio']:.3f}\n"
                 f"- max_token_run: {row['max_token_run']}\n\n"
@@ -350,6 +373,7 @@ def main():
                             temperature,
                             topK,
                             repetitionPenalty,
+                            args.stop_text,
                             args.max_new_tokens,
                             device,
                         )

@@ -2,7 +2,7 @@ import argparse
 
 import tiktoken
 
-from sft_data import EOS_TOKEN, IGNORE_INDEX, encode_sft_example, load_sft_jsonl
+from sft_data import END_TOKEN, IGNORE_INDEX, encode_sft_example, load_sft_jsonl
 
 
 def parse_args():
@@ -19,7 +19,7 @@ def main():
         raise ValueError("SFT 数据为空")
 
     enc = tiktoken.get_encoding(args.encoding)
-    eosId = enc.encode(EOS_TOKEN, allowed_special={EOS_TOKEN})[0]
+    endIds = enc.encode("\n" + END_TOKEN)
     encoded = [encode_sft_example(example, enc) for example in examples]
 
     promptTokens = []
@@ -37,8 +37,8 @@ def main():
         assert all(label == IGNORE_INDEX for label in labels[:promptLen])
         assert all(label != IGNORE_INDEX for label in labels[promptLen:])
         assert labels[promptLen:] == inputIds[promptLen:]
-        assert inputIds[-1] == eosId
-        assert labels[-1] == eosId
+        assert inputIds[-len(endIds):] == endIds
+        assert labels[-len(endIds):] == endIds
 
         promptTokens.append(promptLen)
         answerTokens.append(answerLen)
@@ -53,7 +53,8 @@ def main():
     print(f"avg prompt tokens: {avgPromptTokens:.1f}")
     print(f"avg answer tokens: {avgAnswerTokens:.1f}")
     print(f"max total tokens: {maxTotalTokens}")
-    print(f"eos token id: {eosId}")
+    print(f"end token text: {END_TOKEN}")
+    print(f"end token ids: {endIds}")
     print("labels mask ok")
 
     first = encoded[0]

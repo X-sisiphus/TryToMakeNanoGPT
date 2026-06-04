@@ -643,10 +643,11 @@ python check_sft_batch.py \
 - avg input chars: 70.2
 - avg output chars: 127.1
 - avg prompt tokens: 41.2
-- avg answer tokens: 30.1
-- max total tokens: 102
-- eos token id: 50256
-- batch shape: `(4, 85)`
+- avg answer tokens: 33.1
+- max total tokens: 105
+- end token text: `<END>`
+- end token ids: `[198, 27, 10619, 29]`
+- batch shape: `(4, 88)`
 
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
 
@@ -675,12 +676,13 @@ python check_sft_encoding.py \
 
 - examples: 30
 - avg prompt tokens: 46.7
-- avg answer tokens: 32.8
-- max total tokens: 115
-- eos token id: 50256
+- avg answer tokens: 35.8
+- max total tokens: 118
+- end token text: `<END>`
+- end token ids: `[198, 27, 10619, 29]`
 - prompt 部分 labels 使用 `-100`，不参与 loss
 - answer 部分 labels 等于目标 token id，用于 SFT 训练
-- answer 末尾追加 GPT-2 的 `<|endoftext|>`，用于学习回答结束
+- answer 末尾追加可见的 `<END>`，用于学习回答结束
 
 Batch padding 检查：
 
@@ -693,9 +695,9 @@ python check_sft_batch.py \
 
 当前检查结果：
 
-- `input_ids` shape: `(4, 62)`
-- `labels` shape: `(4, 62)`
-- `attention_mask` shape: `(4, 62)`
+- `input_ids` shape: `(4, 66)`
+- `labels` shape: `(4, 66)`
+- `attention_mask` shape: `(4, 66)`
 - `input_ids` padding 使用 `PAD_TOKEN_ID=0`
 - `labels` padding 使用 `-100`，避免 padding token 参与 loss
 
@@ -861,16 +863,16 @@ out/sft_small_compare/report.md
 - 验证集从 tiny 的 3 条增加到 20 条，曲线比 tiny 更有参考价值
 - 采样仍然容易出现重复或空行，说明这一版 SFT 数据和采样链路还缺少明确的答案结束机制
 
-这个结果暴露出一个关键问题：需要给 SFT answer 末尾加入 EOS token，并让 `sample.py` 在生成 EOS 时停止。否则模型不知道一个回答应该在哪里结束，容易一直重复高概率 token。
+这个结果暴露出一个关键问题：需要给 SFT answer 末尾加入明确的结束标记，并让 `sample.py` 在生成结束标记时停止。否则模型不知道一个回答应该在哪里结束，容易一直重复高概率 token。
 
-SFT EOS 机制已经接入：
+上一版 GPT-2 EOS 机制实验：
 
-- `sft_data.py` 会在每条 answer 末尾追加 `<|endoftext|>`
-- `check_sft_encoding.py` 会检查最后一个 token 和 label 都是 `50256`
+- 当时 `sft_data.py` 在每条 answer 末尾追加 `<|endoftext|>`
 - `sample.py` 支持 `--stop-at-eos`
 - `compare_sft_samples.py` 支持把 `--stop-at-eos` 传给采样脚本
+- 后续诊断发现 GPT-2 EOS 在答案末尾概率极低，因此当前代码已改为可见的 `<END>` 边界实验
 
-重新训练 EOS 版 SFT：
+当时重新训练 EOS 版 SFT：
 
 ```bash
 python train_sft.py \
@@ -885,7 +887,7 @@ python train_sft.py \
   --out-dir out/sft_small_eos_300
 ```
 
-当前 EOS 版训练结果：
+EOS 版训练结果：
 
 ```text
 step 0: train loss 8.4678, val loss 8.1143
@@ -1050,6 +1052,95 @@ answer_end EOS: 平均排名 848，最高也只到 346
 ```
 
 结论：EOS 不是“采样时没碰巧采到”，而是模型在标准答案末尾也几乎不认为 EOS 应该出现。当前重复和停不住的根因更接近训练分布问题：模型强烈学到了换行、句号、单位等局部高频 token，但没有稳定学会“答案结束”这个行为。下一步应优先改 SFT 数据模板，例如在 answer 前后加入更明确的边界，或使用更短、更结构化、更均衡的 SFT 数据重新训练。
+
+显式 `<END>` 边界实验：
+
+当前 `sft_data.py` 会在每条 answer 末尾追加：
+
+```text
+<END>
+```
+
+实际进入 GPT-2 BPE 的结束序列是：
+
+```text
+[198, 27, 10619, 29]  # "\n", "<", "END", ">"
+```
+
+重新训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_end_300
+```
+
+当前 `<END>` 版训练结果：
+
+```text
+step 0: train loss 8.4780, val loss 8.1896
+step 75: train loss 5.4926, val loss 5.8375
+step 150: train loss 3.5132, val loss 4.4519
+step 225: train loss 2.1727, val loss 3.7576
+step 275: train loss 1.6163, val loss 3.3365
+```
+
+采样和诊断：
+
+```bash
+python sample.py \
+  --checkpoint out/sft_small_end_300/ckpt.pt \
+  --prompt $'Instruction:\nExtract the station, signal, value, and unit from the text.\n\nInput:\nStation BJFS shows a vertical velocity of 2.4 mm/yr from space geodetic observations.\n\nAnswer:\n' \
+  --max-new-tokens 80 \
+  --temperature 1.0 \
+  --top-k 40 \
+  --repetition-penalty 1.5 \
+  --stop-at-text "<END>"
+
+python diagnose_next_token.py \
+  --checkpoint out/sft_small_end_300/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --out-dir out/sft_next_token_end_diagnostics \
+  --max-per-task 2 \
+  --top-k 15
+
+python diagnose_sft_generation.py \
+  --checkpoint out/sft_small_end_300/ckpt.pt \
+  --out-dir out/sft_generation_end_diagnostics \
+  --max-new-tokens 80 \
+  --temperatures 0.7,1.0 \
+  --top-ks 40 \
+  --repetition-penalties 1.0,1.5 \
+  --stop-text "<END>" \
+  --num-samples 2
+```
+
+`<END>` 版生成诊断结果：
+
+```text
+total samples: 24
+stop-text rate: 0.00% (0/24)
+avg repeated bigram ratio: 0.645
+max repeated token run: 80
+```
+
+next-token 诊断结果：
+
+```text
+prompt_start avg END-first rank: 1.0
+prompt_start avg END-sequence max rank: 338.3
+answer_end avg END-first rank: 5.1
+answer_end avg END-sequence max rank: 341.2
+```
+
+解释：`<END>` 的第一个 token 是换行，而模型本来就非常偏好换行，所以 `END-first rank` 看起来很好。但完整序列的第二步 `<` 通常排在 300 多名，模型仍然没有真正学会输出完整 `<END>`。这个实验说明：边界 token 要避免以高频换行开头，或者换成更自然、更单一、更频繁的结束模板。
 
 这一步把二阶段主线接起来：
 
