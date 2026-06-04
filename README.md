@@ -649,6 +649,33 @@ python check_sft_batch.py \
 - `input_ids` padding 使用 `PAD_TOKEN_ID=0`
 - `labels` padding 使用 `-100`，避免 padding token 参与 loss
 
+SFT debug 训练：
+
+```bash
+python train_sft.py \
+  --sft-path data/sft/astro_sft_tiny.jsonl \
+  --max-iters 20 \
+  --eval-interval 5 \
+  --batch-size 4 \
+  --block-size 128 \
+  --n-embd 64 \
+  --n-layer 2 \
+  --num-heads 4 \
+  --num-kv-heads 2 \
+  --dropout 0.1 \
+  --out-dir out/sft_debug
+```
+
+当前 debug 结果：
+
+- step 0：loss 10.9659
+- step 5：loss 10.8767
+- step 10：loss 10.7385
+- step 15：loss 10.4012
+- checkpoint 保存到 `out/sft_debug/ckpt.pt`
+
+这一步只验证 SFT 训练链路能跑通。当前 `train_sft.py` 是从随机初始化模型开始训练，20 step 后采样仍然接近随机文本是正常的。真正有意义的 SFT 应该从 continued pretraining checkpoint 初始化，或者使用更大的高质量 SFT 数据。
+
 ### 2.4 偏好优化：DPO / GRPO
 
 在 SFT 之后，可以进入偏好优化。这个阶段不建议一开始就追复杂 RLHF，而是先理解 DPO。

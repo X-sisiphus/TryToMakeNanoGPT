@@ -257,7 +257,7 @@ class BigramLanguageModel(nn.Module):
             logits = logits.view(B*T,C)
             targets = targets.view(B*T)
             #下面的方法会先softmax，再计算loss（对数似然损失）
-            loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets, ignore_index=-100)
         return logits,loss
     
     def configure_optimizers(self, weightDecay, learningRate):
