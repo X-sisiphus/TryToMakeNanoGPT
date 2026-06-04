@@ -812,6 +812,48 @@ out/sft_compare_samples/report.md
 
 这一版输出还不稳定，但它建立了一个很重要的观察工具：以后只要更换更好的 SFT checkpoint，就可以直接复用同一批 prompt 观察模型行为变化。
 
+使用 `astro_sft_small` 训练 300 step：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_300
+```
+
+当前训练结果：
+
+```text
+step 0: train loss 8.2933, val loss 7.6560
+step 75: train loss 5.4476, val loss 6.0623
+step 150: train loss 3.6624, val loss 5.0370
+step 225: train loss 2.2215, val loss 4.1491
+step 275: train loss 1.6608, val loss 4.0064
+```
+
+输出文件：
+
+```text
+out/sft_small_300/ckpt.pt
+out/sft_small_300/log.csv
+out/sft_small_300/loss.png
+out/sft_small_compare/report.md
+```
+
+这次实验说明：
+
+- small SFT 数据确实让 train loss 和 val loss 明显下降
+- 验证集从 tiny 的 3 条增加到 20 条，曲线比 tiny 更有参考价值
+- 采样仍然容易出现重复或空行，说明当前 SFT 数据和采样链路还缺少明确的答案结束机制
+
+下一步应该给 SFT answer 末尾加入 EOS token，并让 `sample.py` 在生成 EOS 时停止。否则模型不知道一个回答应该在哪里结束，容易一直重复高概率 token。
+
 这一步把二阶段主线接起来：
 
 ```text
