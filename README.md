@@ -600,6 +600,47 @@ python check_sft_data.py \
 - `format_conversion`：RA/Dec 等格式转自然语言
 - `qa`：领域问答
 
+tiny 数据集主要用于验证 SFT 编码、batch 和训练链路。进入实际 SFT 对比时，可以生成稍大的 small 数据集：
+
+```bash
+python scripts/build_astro_sft_small.py \
+  --out data/sft/astro_sft_small.jsonl
+```
+
+`astro_sft_small.jsonl` 当前包含 200 条样本，五类任务各 40 条：
+
+- `concept_explanation`：概念解释
+- `field_extraction`：字段抽取
+- `format_conversion`：格式转换
+- `qa`：简短问答
+- `summary`：摘要归纳
+
+检查 small 数据：
+
+```bash
+python check_sft_data.py \
+  --path data/sft/astro_sft_small.jsonl
+
+python check_sft_encoding.py \
+  --path data/sft/astro_sft_small.jsonl \
+  --encoding gpt2
+
+python check_sft_batch.py \
+  --path data/sft/astro_sft_small.jsonl \
+  --encoding gpt2 \
+  --batch-size 4
+```
+
+当前检查结果：
+
+- examples: 200
+- avg input chars: 70.2
+- avg output chars: 127.1
+- avg prompt tokens: 41.2
+- avg answer tokens: 29.1
+- max total tokens: 101
+- batch shape: `(4, 84)`
+
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
 
 当前 SFT 模板：
