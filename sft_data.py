@@ -1,0 +1,48 @@
+import json
+
+def format_sft_example(example):
+    instruction = example["instruction"].strip()
+    inputText = example["input"].strip()
+    outputText = example["output"].strip()
+
+    prompt = (
+        "Instruction:\n"
+        f"{instruction}\n\n"
+        "Input:\n"
+        f"{inputText}\n\n"
+        "Answer:\n"
+    )
+
+    answer = outputText
+
+    return prompt, answer
+
+IGNORE_INDEX = -100
+
+
+def encode_sft_example(example, enc):
+    prompt, answer = format_sft_example(example)
+
+    promptIds = enc.encode(prompt)
+    answerIds = enc.encode(answer)
+
+    inputIds = promptIds + answerIds
+    labels = [IGNORE_INDEX] * len(promptIds) + answerIds
+
+    return {
+        "input_ids": inputIds,
+        "labels": labels,
+        "prompt": prompt,
+        "answer": answer,
+        "prompt_tokens": len(promptIds),
+        "answer_tokens": len(answerIds),
+    }
+
+def load_sft_jsonl(path):
+    examples = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                examples.append(json.loads(line))
+    return examples

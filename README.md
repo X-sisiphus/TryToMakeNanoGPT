@@ -602,6 +602,36 @@ python check_sft_data.py \
 
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
 
+当前 SFT 模板：
+
+```text
+Instruction:
+...
+
+Input:
+...
+
+Answer:
+...
+```
+
+编码检查：
+
+```bash
+python check_sft_encoding.py \
+  --path data/sft/astro_sft_tiny.jsonl \
+  --encoding gpt2
+```
+
+当前检查结果：
+
+- examples: 30
+- avg prompt tokens: 46.7
+- avg answer tokens: 31.8
+- max total tokens: 114
+- prompt 部分 labels 使用 `-100`，不参与 loss
+- answer 部分 labels 等于目标 token id，用于 SFT 训练
+
 ### 2.4 偏好优化：DPO / GRPO
 
 在 SFT 之后，可以进入偏好优化。这个阶段不建议一开始就追复杂 RLHF，而是先理解 DPO。
