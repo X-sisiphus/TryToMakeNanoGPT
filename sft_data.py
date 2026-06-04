@@ -20,17 +20,22 @@ def format_sft_example(example):
 
 IGNORE_INDEX = -100
 PAD_TOKEN_ID = 0
-END_TOKEN = "<END>"
+END_TOKEN = " END"
 EOS_TOKEN = "<|endoftext|>"
 
 def encode_sft_example(example, enc):
     prompt, answer = format_sft_example(example)
 
     promptIds = enc.encode(prompt)
-    answerIds = enc.encode(answer + "\n" + END_TOKEN)
+    answerIds = enc.encode(answer + END_TOKEN)
 
     inputIds = promptIds + answerIds
-    labels = [IGNORE_INDEX] * len(promptIds) + answerIds
+    labels = [IGNORE_INDEX] * len(inputIds)
+
+    # 模型在每个位置预测“下一个 token”，所以 answer 的第一个 token
+    # 要放在 prompt 最后一个位置的 label 上，END 也要由它前一个 token 预测。
+    answerStart = len(promptIds) - 1
+    labels[answerStart:answerStart + len(answerIds)] = answerIds
 
     return {
         "input_ids": inputIds,

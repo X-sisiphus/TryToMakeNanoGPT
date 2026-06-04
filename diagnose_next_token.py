@@ -67,7 +67,7 @@ def next_token_distribution(model, enc, text, topK, device):
         probs = torch.softmax(logits, dim=-1)[0]
 
     eosId = enc.eot_token
-    endSequenceIds = enc.encode("\n" + END_TOKEN)
+    endSequenceIds = enc.encode(END_TOKEN)
     endFirstId = endSequenceIds[0]
     eosProb = probs[eosId].item()
     eosRank = int((probs > probs[eosId]).sum().item()) + 1

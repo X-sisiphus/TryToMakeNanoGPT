@@ -643,11 +643,11 @@ python check_sft_batch.py \
 - avg input chars: 70.2
 - avg output chars: 127.1
 - avg prompt tokens: 41.2
-- avg answer tokens: 33.1
-- max total tokens: 105
-- end token text: `<END>`
-- end token ids: `[198, 27, 10619, 29]`
-- batch shape: `(4, 88)`
+- avg answer tokens: 30.1
+- max total tokens: 102
+- end token text: ` END`
+- end token ids: `[23578]`
+- batch shape: `(4, 85)`
 
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
 
@@ -676,13 +676,14 @@ python check_sft_encoding.py \
 
 - examples: 30
 - avg prompt tokens: 46.7
-- avg answer tokens: 35.8
-- max total tokens: 118
-- end token text: `<END>`
-- end token ids: `[198, 27, 10619, 29]`
-- prompt 部分 labels 使用 `-100`，不参与 loss
-- answer 部分 labels 等于目标 token id，用于 SFT 训练
-- answer 末尾追加可见的 `<END>`，用于学习回答结束
+- avg answer tokens: 32.8
+- max total tokens: 115
+- end token text: ` END`
+- end token ids: `[23578]`
+- prompt 部分大多数 labels 使用 `-100`，不参与 loss
+- prompt 最后一个位置的 label 是 answer 的第一个 token
+- answer 部分的 label 右移一位，用于 next-token SFT 训练
+- answer 末尾追加单 token ` END`，用于学习回答结束
 
 Batch padding 检查：
 
@@ -695,9 +696,9 @@ python check_sft_batch.py \
 
 当前检查结果：
 
-- `input_ids` shape: `(4, 66)`
-- `labels` shape: `(4, 66)`
-- `attention_mask` shape: `(4, 66)`
+- `input_ids` shape: `(4, 63)`
+- `labels` shape: `(4, 63)`
+- `attention_mask` shape: `(4, 63)`
 - `input_ids` padding 使用 `PAD_TOKEN_ID=0`
 - `labels` padding 使用 `-100`，避免 padding token 参与 loss
 
@@ -1051,9 +1052,9 @@ answer_end top1: 多数是 "."，概率最高约 0.93
 answer_end EOS: 平均排名 848，最高也只到 346
 ```
 
-结论：EOS 不是“采样时没碰巧采到”，而是模型在标准答案末尾也几乎不认为 EOS 应该出现。当前重复和停不住的根因更接近训练分布问题：模型强烈学到了换行、句号、单位等局部高频 token，但没有稳定学会“答案结束”这个行为。下一步应优先改 SFT 数据模板，例如在 answer 前后加入更明确的边界，或使用更短、更结构化、更均衡的 SFT 数据重新训练。
+当时的阶段性结论：EOS 不是“采样时没碰巧采到”，而是模型在标准答案末尾也几乎不认为 EOS 应该出现。这个现象先引出了结束模板排查，但后续进一步定位发现，更深层的根因是 SFT label 没有按 next-token 方式右移。
 
-显式 `<END>` 边界实验：
+显式 `<END>` 边界实验，历史排查记录：
 
 当前 `sft_data.py` 会在每条 answer 末尾追加：
 
@@ -1140,7 +1141,85 @@ answer_end avg END-first rank: 5.1
 answer_end avg END-sequence max rank: 341.2
 ```
 
-解释：`<END>` 的第一个 token 是换行，而模型本来就非常偏好换行，所以 `END-first rank` 看起来很好。但完整序列的第二步 `<` 通常排在 300 多名，模型仍然没有真正学会输出完整 `<END>`。这个实验说明：边界 token 要避免以高频换行开头，或者换成更自然、更单一、更频繁的结束模板。
+当时的解释：`<END>` 的第一个 token 是换行，而模型本来就非常偏好换行，所以 `END-first rank` 看起来很好。但完整序列的第二步 `<` 通常排在 300 多名，模型仍然没有真正学会输出完整 `<END>`。
+
+进一步修复：SFT label 右移对齐
+
+普通 causal LM 训练不是“当前位置预测当前位置”，而是“当前位置预测下一个 token”。`train.py` 的普通预训练已经通过 `x` 和 `y=x+1` 做了这个对齐；但旧版 SFT 数据把 answer token 直接放在同一个位置的 label 上，导致模型训练时可以看着 answer token 预测自己。
+
+旧版错误对齐：
+
+```text
+input:  prompt_token answer_1 answer_2 ... END
+label:  -100         answer_1 answer_2 ... END
+```
+
+正确 SFT 对齐：
+
+```text
+input:  prompt_token answer_1 answer_2 ... END
+label:  answer_1     answer_2 ... END   -100
+```
+
+当前 `sft_data.py` 的做法是：
+
+```python
+labels = [IGNORE_INDEX] * len(inputIds)
+answerStart = len(promptIds) - 1
+labels[answerStart:answerStart + len(answerIds)] = answerIds
+```
+
+同时把结束标记换成 GPT-2 BPE 里的单 token：
+
+```text
+ END -> [23578]
+```
+
+重新训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_shifted_end_300
+```
+
+正确对齐后的训练结果：
+
+```text
+step 0: train loss 8.1694, val loss 7.8326
+step 75: train loss 6.1057, val loss 6.9887
+step 150: train loss 4.4361, val loss 6.4496
+step 225: train loss 3.4031, val loss 6.3138
+step 275: train loss 2.8531, val loss 6.1267
+```
+
+这里的 val loss 比旧实验更高，但不能直接和旧实验比较。旧实验有 label 泄漏，loss 偏乐观；修复后才是真正的 next-token SFT loss。
+
+next-token 诊断结果：
+
+```text
+answer_end avg END-first rank: 1.0
+answer_end avg END-first prob: 0.311218
+answer_end avg END-sequence max rank: 1.0
+```
+
+生成诊断结果：
+
+```text
+total samples: 24
+stop-text rate: 95.83% (23/24)
+avg repeated bigram ratio: 0.067
+max repeated token run: 2
+```
+
+结论：结束问题在当前阶段可以解决。真正的关键不是强行让模型学 GPT-2 EOS，而是保证 SFT labels 按 causal LM 的 next-token 目标正确右移，再选择一个容易学习的单 token 结束标记。当前模型的回答质量仍然一般，但“能不能停”这个问题已经基本修复。
 
 这一步把二阶段主线接起来：
 

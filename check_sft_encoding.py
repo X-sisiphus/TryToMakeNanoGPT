@@ -19,7 +19,7 @@ def main():
         raise ValueError("SFT 数据为空")
 
     enc = tiktoken.get_encoding(args.encoding)
-    endIds = enc.encode("\n" + END_TOKEN)
+    endIds = enc.encode(END_TOKEN)
     encoded = [encode_sft_example(example, enc) for example in examples]
 
     promptTokens = []
@@ -34,11 +34,14 @@ def main():
         assert len(inputIds) == len(labels)
         assert promptLen > 0
         assert answerLen > 0
-        assert all(label == IGNORE_INDEX for label in labels[:promptLen])
-        assert all(label != IGNORE_INDEX for label in labels[promptLen:])
-        assert labels[promptLen:] == inputIds[promptLen:]
+        answerStart = promptLen - 1
+        answerEnd = answerStart + answerLen
+
+        assert all(label == IGNORE_INDEX for label in labels[:answerStart])
+        assert labels[answerStart:answerEnd] == inputIds[promptLen:]
+        assert all(label == IGNORE_INDEX for label in labels[answerEnd:])
         assert inputIds[-len(endIds):] == endIds
-        assert labels[-len(endIds):] == endIds
+        assert labels[answerEnd - len(endIds):answerEnd] == endIds
 
         promptTokens.append(promptLen)
         answerTokens.append(answerLen)
