@@ -35,6 +35,7 @@
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── compare_sft_samples.py # 对比 SFT 前后的 instruction 采样结果
 ├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
+├── diagnose_next_token.py # 诊断 Answer 前后 next-token 分布和 EOS 排名
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
 ├── plot_ablation_summary.py # 绘制消融实验总览图
@@ -1005,6 +1006,50 @@ penalty 2.0: eos 0/12, avg repeated bigram 0.064, max token run 9
 ```
 
 结论：repetition penalty 能显著降低重复，但没有让模型学会生成 EOS，也没有让回答真正变正确。它是一个解码层面的缓解工具，不是训练质量的根因修复。下一步更应该做 greedy 对照和 EOS 概率诊断，确认模型在 `Answer:` 后到底把哪些 token 排在前面。
+
+EOS 概率 / next-token 诊断：
+
+```bash
+python diagnose_next_token.py \
+  --checkpoint out/sft_small_eos_300/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --out-dir out/sft_next_token_diagnostics \
+  --max-per-task 2 \
+  --top-k 15
+```
+
+输出文件：
+
+```text
+out/sft_next_token_diagnostics/summary.csv
+out/sft_next_token_diagnostics/top_tokens.csv
+out/sft_next_token_diagnostics/report.md
+```
+
+这个脚本检查两个位置：
+
+- `prompt_start`：刚看到 `Answer:\n`，模型应该开始生成答案
+- `answer_end`：给出标准答案文本之后，模型应该倾向于生成 EOS
+
+当前诊断结果：
+
+```text
+examples inspected: 10
+avg prompt-start EOS rank: 865.3
+avg prompt-start EOS prob: 0.000004
+avg answer-end EOS rank: 848.4
+avg answer-end EOS prob: 0.000030
+```
+
+进一步观察：
+
+```text
+prompt_start top1: 全部是换行 token，概率约 0.88
+answer_end top1: 多数是 "."，概率最高约 0.93
+answer_end EOS: 平均排名 848，最高也只到 346
+```
+
+结论：EOS 不是“采样时没碰巧采到”，而是模型在标准答案末尾也几乎不认为 EOS 应该出现。当前重复和停不住的根因更接近训练分布问题：模型强烈学到了换行、句号、单位等局部高频 token，但没有稳定学会“答案结束”这个行为。下一步应优先改 SFT 数据模板，例如在 answer 前后加入更明确的边界，或使用更短、更结构化、更均衡的 SFT 数据重新训练。
 
 这一步把二阶段主线接起来：
 
