@@ -2,7 +2,7 @@ import argparse
 
 import tiktoken
 
-from sft_data import END_TOKEN, IGNORE_INDEX, encode_sft_example, load_sft_jsonl
+from sft_data import END_TOKEN, EOS_TOKEN, IGNORE_INDEX, encode_sft_example, load_sft_jsonl
 
 
 def parse_args():
@@ -19,7 +19,7 @@ def main():
         raise ValueError("SFT 数据为空")
 
     enc = tiktoken.get_encoding(args.encoding)
-    endIds = enc.encode(END_TOKEN)
+    endIds = enc.encode(END_TOKEN, allowed_special={EOS_TOKEN})
     encoded = [encode_sft_example(example, enc) for example in examples]
 
     promptTokens = []

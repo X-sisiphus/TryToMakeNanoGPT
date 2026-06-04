@@ -645,8 +645,8 @@ python check_sft_batch.py \
 - avg prompt tokens: 41.2
 - avg answer tokens: 30.1
 - max total tokens: 102
-- end token text: ` END`
-- end token ids: `[23578]`
+- end token text: `<|endoftext|>`
+- end token ids: `[50256]`
 - batch shape: `(4, 85)`
 
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
@@ -678,12 +678,12 @@ python check_sft_encoding.py \
 - avg prompt tokens: 46.7
 - avg answer tokens: 32.8
 - max total tokens: 115
-- end token text: ` END`
-- end token ids: `[23578]`
+- end token text: `<|endoftext|>`
+- end token ids: `[50256]`
 - prompt 部分大多数 labels 使用 `-100`，不参与 loss
 - prompt 最后一个位置的 label 是 answer 的第一个 token
 - answer 部分的 label 右移一位，用于 next-token SFT 训练
-- answer 末尾追加单 token ` END`，用于学习回答结束
+- answer 末尾追加 GPT-2 EOS `<|endoftext|>`，用于学习回答结束
 
 Batch padding 检查：
 
@@ -1169,7 +1169,7 @@ answerStart = len(promptIds) - 1
 labels[answerStart:answerStart + len(answerIds)] = answerIds
 ```
 
-同时把结束标记换成 GPT-2 BPE 里的单 token：
+先把结束标记换成 GPT-2 BPE 里的普通单 token 做对照：
 
 ```text
  END -> [23578]
@@ -1219,7 +1219,76 @@ avg repeated bigram ratio: 0.067
 max repeated token run: 2
 ```
 
-结论：结束问题在当前阶段可以解决。真正的关键不是强行让模型学 GPT-2 EOS，而是保证 SFT labels 按 causal LM 的 next-token 目标正确右移，再选择一个容易学习的单 token 结束标记。当前模型的回答质量仍然一般，但“能不能停”这个问题已经基本修复。
+结论：结束问题在当前阶段可以解决。真正的关键是保证 SFT labels 按 causal LM 的 next-token 目标正确右移；` END` 只是一个帮助排查的普通单 token stop marker。当前模型的回答质量仍然一般，但“能不能停”这个问题已经基本修复。
+
+回到 GPT-2 EOS：
+
+修复 label 右移以后，可以正常用回标准 EOS：
+
+```text
+<|endoftext|> -> [50256]
+```
+
+当前 `sft_data.py` 已经重新切回 EOS：
+
+```python
+END_TOKEN = EOS_TOKEN
+answerIds = enc.encode(
+    answer + END_TOKEN,
+    allowed_special={EOS_TOKEN},
+)
+```
+
+重新训练 EOS shifted 版：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_shifted_eos_300
+```
+
+EOS shifted 训练结果：
+
+```text
+step 0: train loss 8.1626, val loss 7.8043
+step 75: train loss 6.0997, val loss 6.9557
+step 150: train loss 4.4207, val loss 6.4315
+step 225: train loss 3.3870, val loss 6.2960
+step 275: train loss 2.8398, val loss 6.1140
+```
+
+EOS next-token 诊断：
+
+```text
+answer_end avg EOS rank: 1.0
+answer_end avg EOS prob: 0.290772
+```
+
+EOS 生成诊断：
+
+```text
+total samples: 24
+eos rate: 83.33% (20/24)
+avg repeated bigram ratio: 0.071
+max repeated token run: 2
+```
+
+对比结论：
+
+```text
+旧 EOS + 错误 label 对齐：answer_end EOS rank 约 848，生成不停止
+END + 正确 label 对齐：stop-text rate 95.83%
+EOS + 正确 label 对齐：eos rate 83.33%，answer_end EOS rank 1
+```
+
+所以当前项目可以正常用回 EOS。` END` 版可以保留为历史对照；主线推荐用 EOS，因为它是 tokenizer 原生结束符，`sample.py` 可以直接通过 `--stop-at-eos` 截断生成。
 
 这一步把二阶段主线接起来：
 

@@ -8,7 +8,7 @@ import torch
 import tiktoken
 
 from model import BigramLanguageModel, GPTConfig
-from sft_data import END_TOKEN, format_sft_example, load_sft_jsonl
+from sft_data import END_TOKEN, EOS_TOKEN, format_sft_example, load_sft_jsonl
 
 
 def parse_args():
@@ -67,7 +67,7 @@ def next_token_distribution(model, enc, text, topK, device):
         probs = torch.softmax(logits, dim=-1)[0]
 
     eosId = enc.eot_token
-    endSequenceIds = enc.encode(END_TOKEN)
+    endSequenceIds = enc.encode(END_TOKEN, allowed_special={EOS_TOKEN})
     endFirstId = endSequenceIds[0]
     eosProb = probs[eosId].item()
     eosRank = int((probs > probs[eosId]).sum().item()) + 1
@@ -211,7 +211,7 @@ def write_outputs(args, rows, topRows):
 
         f.write("Interpretation:\n\n")
         f.write("- At `prompt_start`, EOS should usually be low because the model should begin answering.\n")
-        f.write("- At `answer_end`, END-first should be high if the model has learned the visible `<END>` stop marker.\n")
+        f.write("- At `answer_end`, the configured stop token should be high if the model has learned when to stop.\n")
         f.write("- EOS is still reported for comparison with earlier experiments.\n\n")
 
         f.write("## Worst Answer-end EOS Ranks\n\n")
