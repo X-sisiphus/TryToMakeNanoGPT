@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-k", type=int, default=None)
+    parser.add_argument("--stop-at-eos", action="store_true")
     return parser.parse_args()
 
 args = parse_args()
@@ -31,10 +32,12 @@ vocabInfo = checkpoint["vocab"]
 vocabType = vocabInfo.get("type", "char")
 startText = args.prompt if args.prompt is not None else args.start
 print(f"vocab type: {vocabType}", flush=True)
+eosId = None
 
 if vocabType == "tokenizer":
     meta = vocabInfo["meta"]
     enc = tiktoken.get_encoding(meta["encoding"])
+    eosId = enc.eot_token
 
     def encode(s):
         return enc.encode(s)
@@ -69,4 +72,14 @@ with torch.no_grad():
         topK=args.top_k,
     )
 
-print(decode(generated[0].tolist()))
+generatedIds = generated[0].tolist()
+
+if args.stop_at_eos and eosId is not None:
+    promptLen = context.shape[1]
+    generatedTail = generatedIds[promptLen:]
+
+    if eosId in generatedTail:
+        eosPos = generatedIds.index(eosId, promptLen)
+        generatedIds = generatedIds[:eosPos]
+
+print(decode(generatedIds))

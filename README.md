@@ -637,9 +637,10 @@ python check_sft_batch.py \
 - avg input chars: 70.2
 - avg output chars: 127.1
 - avg prompt tokens: 41.2
-- avg answer tokens: 29.1
-- max total tokens: 101
-- batch shape: `(4, 84)`
+- avg answer tokens: 30.1
+- max total tokens: 102
+- eos token id: 50256
+- batch shape: `(4, 85)`
 
 Continued pretraining 仍然是普通文本的 next-token prediction；SFT 则把数据组织成 instruction/input/output，让模型学习“看到任务描述后生成目标答案”。后续训练 SFT 时，还需要决定是否只在 `output` 部分计算 loss，这是 instruction tuning 的关键技术点之一。
 
@@ -668,10 +669,12 @@ python check_sft_encoding.py \
 
 - examples: 30
 - avg prompt tokens: 46.7
-- avg answer tokens: 31.8
-- max total tokens: 114
+- avg answer tokens: 32.8
+- max total tokens: 115
+- eos token id: 50256
 - prompt 部分 labels 使用 `-100`，不参与 loss
 - answer 部分 labels 等于目标 token id，用于 SFT 训练
+- answer 末尾追加 GPT-2 的 `<|endoftext|>`，用于学习回答结束
 
 Batch padding 检查：
 
@@ -850,9 +853,66 @@ out/sft_small_compare/report.md
 
 - small SFT 数据确实让 train loss 和 val loss 明显下降
 - 验证集从 tiny 的 3 条增加到 20 条，曲线比 tiny 更有参考价值
-- 采样仍然容易出现重复或空行，说明当前 SFT 数据和采样链路还缺少明确的答案结束机制
+- 采样仍然容易出现重复或空行，说明这一版 SFT 数据和采样链路还缺少明确的答案结束机制
 
-下一步应该给 SFT answer 末尾加入 EOS token，并让 `sample.py` 在生成 EOS 时停止。否则模型不知道一个回答应该在哪里结束，容易一直重复高概率 token。
+这个结果暴露出一个关键问题：需要给 SFT answer 末尾加入 EOS token，并让 `sample.py` 在生成 EOS 时停止。否则模型不知道一个回答应该在哪里结束，容易一直重复高概率 token。
+
+SFT EOS 机制已经接入：
+
+- `sft_data.py` 会在每条 answer 末尾追加 `<|endoftext|>`
+- `check_sft_encoding.py` 会检查最后一个 token 和 label 都是 `50256`
+- `sample.py` 支持 `--stop-at-eos`
+- `compare_sft_samples.py` 支持把 `--stop-at-eos` 传给采样脚本
+
+重新训练 EOS 版 SFT：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_small.jsonl \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_eos_300
+```
+
+当前 EOS 版训练结果：
+
+```text
+step 0: train loss 8.4678, val loss 8.1143
+step 75: train loss 5.5900, val loss 6.4452
+step 150: train loss 3.4745, val loss 5.0172
+step 225: train loss 2.2693, val loss 4.3927
+step 275: train loss 1.7174, val loss 3.8776
+```
+
+绘图和采样：
+
+```bash
+python plot_log.py \
+  --log out/sft_small_eos_300/log.csv \
+  --out out/sft_small_eos_300/loss.png
+
+python compare_sft_samples.py \
+  --base-checkpoint out/astro_small_500/ckpt.pt \
+  --sft-checkpoint out/sft_small_eos_300/ckpt.pt \
+  --out-dir out/sft_eos_compare \
+  --max-new-tokens 80 \
+  --temperature 0.7 \
+  --top-k 40 \
+  --stop-at-eos
+```
+
+这一步的结论要分开看：
+
+- 代码机制已经完成，SFT 样本的 answer 末尾确实包含 EOS
+- EOS 版 val loss 略低于无 EOS 版，说明训练没有被破坏
+- 但 300 step 采样时仍然经常重复或输出空行，说明模型还没有稳定学会主动生成 EOS
+
+这不是失败，而是暴露了下一个训练问题：当前模型和数据还太小，EOS 只是“提供了停止目标”，不等于模型已经学会稳定停下。后续可以用更长训练、改进数据分布、或增加重复惩罚/贪心评估来继续排查。
 
 这一步把二阶段主线接起来：
 

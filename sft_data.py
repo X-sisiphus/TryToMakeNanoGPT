@@ -20,12 +20,16 @@ def format_sft_example(example):
 
 IGNORE_INDEX = -100
 PAD_TOKEN_ID = 0
+EOS_TOKEN = "<|endoftext|>"
 
 def encode_sft_example(example, enc):
     prompt, answer = format_sft_example(example)
 
     promptIds = enc.encode(prompt)
-    answerIds = enc.encode(answer)
+    answerIds = enc.encode(
+        answer + EOS_TOKEN,
+        allowed_special={EOS_TOKEN},
+    )
 
     inputIds = promptIds + answerIds
     labels = [IGNORE_INDEX] * len(promptIds) + answerIds

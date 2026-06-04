@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=120)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
+    parser.add_argument("--stop-at-eos", action="store_true")
     return parser.parse_args()
 
 PROMPTS = [
@@ -52,6 +53,9 @@ def run_sample(checkpoint, prompt, args):
         "--top-k", str(args.top_k),
     ]
 
+    if args.stop_at_eos:
+        cmd.append("--stop-at-eos")
+
     result = subprocess.run(
         cmd,
         check=True,
@@ -59,11 +63,11 @@ def run_sample(checkpoint, prompt, args):
         text=True,
     )
 
-    output = result.stdout.strip()
+    output = result.stdout
     promptStart = output.rfind(prompt)
 
     if promptStart == -1:
-        return output
+        return output.strip()
 
     return output[promptStart + len(prompt):].strip()
 
