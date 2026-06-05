@@ -47,6 +47,7 @@
 ├── summarize_ablation.py # 汇总多组消融实验的最终指标
 ├── scripts/build_field_sft.py # 生成 field_extraction 可验证 SFT 数据
 ├── scripts/build_field_copy_sft.py # 生成结构化 copy 型字段抽取数据
+├── scripts/build_value_copy_sft.py # 生成单字段 value copy 压力测试数据
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -1696,6 +1697,104 @@ station 32%, signal 62%, value 0%, unit 90%, all fields 0%
 ```
 
 结论：把输入改成结构化 copy 格式，并没有真正解决精确复制问题。它让 `station` 小幅提升、`unit` 明显提升，但 `value` 仍然几乎完全失败。说明当前瓶颈不只是“自然语言输入太难”，而是这个小模型在当前训练规模下对数字和实体的逐字复制能力不足。下一步更应该做 copy 机制压力测试：从最简单的 `value=2.4 -> value: 2.4` 开始，只训练一个字段，确认模型到底能不能复制数字。
+
+单字段 value copy 压力测试：
+
+为了排除“四字段输出太复杂”的干扰，进一步把任务压缩到最小形式：
+
+```text
+Input:
+value=38.5
+
+Answer:
+value: 38.5
+```
+
+新增脚本：
+
+```bash
+python scripts/build_value_copy_sft.py \
+  --out data/sft/value_copy_500.jsonl \
+  --num-examples 500
+```
+
+数据检查：
+
+```text
+examples: 500
+avg prompt tokens: 28.2
+avg answer tokens: 6.2
+max total tokens: 37
+end token ids: [50256]
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/value_copy_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 64 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_value_copy_500
+```
+
+训练结果：
+
+```text
+train examples: 450
+val examples: 50
+step 0: train loss 8.2263, val loss 8.1218
+step 150: train loss 2.4863, val loss 2.4400
+step 300: train loss 1.0728, val loss 1.0816
+step 450: train loss 0.8958, val loss 0.8245
+```
+
+质量评测：
+
+```text
+examples: 50
+eos rate: 100.00%
+exact match: 6.00%
+avg token F1: 0.530
+avg target recall: 0.530
+avg char similarity: 0.833
+avg repeated bigram ratio: 0.000
+```
+
+字段级评测：
+
+```bash
+python evaluate_field_accuracy.py \
+  --results out/sft_quality_value_copy_500_val/results.csv \
+  --out-dir out/field_accuracy_value_copy_500
+```
+
+结果：
+
+```text
+value accuracy: 6.00%
+```
+
+典型错误：
+
+```text
+target:     value: 5.6
+prediction: value: 12.5
+
+target:     value: -4.4
+prediction: value: -0.5
+
+target:     value: 52.2
+prediction: value: 12.5
+```
+
+结论：即使任务简化到只复制一个 value，模型也只有 6% exact match。这说明当前 6.57M 参数的小模型、当前预训练和 SFT 设置下，数字复制是明确瓶颈。后续如果要继续研究这个方向，应该优先尝试三件事：增加模型容量、增加训练步数/数据重复、或把数字拆成更稳定的字符级/格式化 token 任务，而不是直接进入 DPO。
 
 这一步把二阶段主线接起来：
 
