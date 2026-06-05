@@ -44,6 +44,7 @@
 ├── run_ablation.py       # 批量运行结构消融实验
 ├── run_full_ablation.py  # 一键运行消融、汇总和绘图
 ├── summarize_ablation.py # 汇总多组消融实验的最终指标
+├── scripts/build_field_sft.py # 生成 field_extraction 可验证 SFT 数据
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -1458,6 +1459,96 @@ avg repeated bigram ratio: 0.000
 ```
 
 结论：单任务训练明显改善了结构化抽取能力，说明多任务混合确实会干扰这个小模型。但预测仍然经常把 station/value 记错，例如目标是 `KOKEE`，模型输出 `BJFS` 或 `WETTZELL`。这说明下一步不应急着上 DPO，而应先扩大和重构 SFT 数据，尤其是字段抽取这种可验证任务。
+
+扩充 field extraction 到 500 条：
+
+新增脚本：
+
+```bash
+python scripts/build_field_sft.py \
+  --out data/sft/astro_sft_field_500.jsonl \
+  --num-examples 500
+```
+
+这个脚本系统组合：
+
+```text
+station: BJFS / WETTZELL / KOKEE / NYALES20 / HOBART12 / ONSA / ...
+signal: vertical velocity / east displacement / clock bias / zenith wet delay / ...
+value: 正数、负数、小数
+unit: mm/yr / mm / ns / ps
+```
+
+数据检查：
+
+```text
+examples: 500
+avg prompt tokens: 47.5
+avg answer tokens: 23.3
+max total tokens: 81
+end token ids: [50256]
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_field_500
+```
+
+训练结果：
+
+```text
+train examples: 450
+val examples: 50
+step 0: train loss 7.1243, val loss 6.9742
+step 150: train loss 2.5977, val loss 2.5498
+step 300: train loss 0.9741, val loss 0.9779
+step 450: train loss 0.5595, val loss 0.5853
+```
+
+质量评测：
+
+```bash
+python evaluate_sft_quality.py \
+  --checkpoint out/sft_field_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_500.jsonl \
+  --split val \
+  --split-mode stratified \
+  --out-dir out/sft_quality_field_500_val \
+  --temperature 0.0 \
+  --max-new-tokens 80
+```
+
+结果：
+
+```text
+examples: 50
+eos rate: 100.00%
+exact match: 0.00%
+avg token F1: 0.729
+avg target recall: 0.732
+avg char similarity: 0.869
+avg repeated bigram ratio: 0.008
+```
+
+对比：
+
+```text
+field_40 token F1: 0.453
+field_500 token F1: 0.729
+```
+
+结论：扩大高质量、可验证的单任务数据显著提升了小模型的结构化抽取能力。它已经学会了输出字段格式、命中 EOS、减少重复，但 exact match 仍为 0，最低分样例里还会把 `clock bias` 预测成 `north displacement`，或把数值预测成训练集中常见的其他值。下一步应该增加字段级评测，例如分别计算 station、signal、value、unit 的准确率，而不是只看 token F1。
 
 这一步把二阶段主线接起来：
 
