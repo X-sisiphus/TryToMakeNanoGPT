@@ -1,3 +1,9 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 import argparse
 import os
 import subprocess
@@ -47,7 +53,7 @@ PROMPTS = [
 def run_sample(checkpoint, prompt, args):
     cmd = [
         sys.executable,
-        "sample.py",
+        str(ROOT / "sample.py"),
         "--checkpoint", checkpoint,
         "--prompt", prompt,
         "--max-new-tokens", str(args.max_new_tokens),

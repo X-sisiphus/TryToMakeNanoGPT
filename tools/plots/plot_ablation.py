@@ -1,3 +1,9 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 import argparse
 import os
 import subprocess
@@ -24,7 +30,7 @@ for name, runDir, logPath in experiments:
     outPath = os.path.join(runDir, "loss.png")
     cmd = [
         sys.executable,
-        "plot_log.py",
+        str(ROOT / "tools/plots/plot_log.py"),
         "--log", logPath,
         "--out", outPath,
     ]

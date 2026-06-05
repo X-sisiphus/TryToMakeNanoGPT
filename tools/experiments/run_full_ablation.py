@@ -1,3 +1,9 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 import argparse
 import subprocess
 import sys
@@ -19,7 +25,7 @@ args = parse_args()
 
 ablationCmd = [
     sys.executable,
-    "run_ablation.py",
+    str(ROOT / "tools/experiments/run_ablation.py"),
     "--out-dir", args.out_dir,
     "--max-iters", str(args.max_iters),
     "--eval-interval", str(args.eval_interval),
@@ -35,19 +41,19 @@ summaryPath = f"{args.out_dir}/summary.csv"
 
 run([
     sys.executable,
-    "summarize_ablation.py",
+    str(ROOT / "tools/experiments/summarize_ablation.py"),
     "--root", args.out_dir,
     "--out", summaryPath,
 ])
 
 run([
     sys.executable,
-    "plot_ablation.py",
+    str(ROOT / "tools/plots/plot_ablation.py"),
     "--root", args.out_dir,
 ])
 
 run([
     sys.executable,
-    "plot_ablation_summary.py",
+    str(ROOT / "tools/plots/plot_ablation_summary.py"),
     "--summary", summaryPath,
 ])

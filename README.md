@@ -28,26 +28,17 @@
 .
 ├── model.py              # 模型结构、RoPE、GQA、采样生成、优化器分组
 ├── train.py              # 训练、验证、checkpoint、日志、学习率调度
-├── data_loader.py        # 字符级数据和 tokenizer 缓存数据的统一加载入口
-├── prepare_data.py       # 将原始文本预处理为 tokenizer token 缓存
-├── check_data_loader.py  # 检查数据加载和 causal LM batch 构造
-├── inspect_tokenizer.py  # 观察 tokenizer 的 token id 和文本切片
+├── train_sft.py          # SFT 训练入口
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
-├── compare_sft_samples.py # 对比 SFT 前后的 instruction 采样结果
-├── filter_sft_by_task.py # 按 task 筛选 SFT jsonl，构造单任务对照数据
-├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
-├── diagnose_next_token.py # 诊断 Answer 前后 next-token 分布和 EOS 排名
-├── evaluate_sft_quality.py # 评测 SFT 回答质量、EOS 命中和重复率
-├── evaluate_field_accuracy.py # 评测字段抽取中 station/signal/value/unit 准确率
-├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
-├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
-├── plot_ablation_summary.py # 绘制消融实验总览图
-├── run_ablation.py       # 批量运行结构消融实验
-├── run_full_ablation.py  # 一键运行消融、汇总和绘图
-├── summarize_ablation.py # 汇总多组消融实验的最终指标
-├── scripts/build_field_sft.py # 生成 field_extraction 可验证 SFT 数据
-├── scripts/build_field_copy_sft.py # 生成结构化 copy 型字段抽取数据
-├── scripts/build_value_copy_sft.py # 生成单字段 value copy 压力测试数据
+├── data_loader.py        # 字符级数据和 tokenizer 缓存数据的统一加载入口
+├── sft_data.py           # SFT 样本格式化、编码、padding
+├── tools/
+│   ├── data/             # tokenizer 数据预处理、数据加载检查
+│   ├── sft/              # SFT 数据检查、编码检查、task 筛选
+│   ├── eval/             # SFT 采样对比、生成诊断、质量评测
+│   ├── plots/            # loss 曲线和消融图表
+│   └── experiments/      # 消融实验运行和汇总
+├── scripts/              # SFT / 领域数据生成脚本
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -78,7 +69,7 @@ python -m pip install -r requirements-mps.txt
 第一阶段的 `train.py` 直接从 `input.txt` 构造字符级词表。第二阶段开始，需要先把原始文本离线处理成 tokenizer token 缓存：
 
 ```bash
-python prepare_data.py \
+python tools/data/prepare_data.py \
   --input input.txt \
   --out-dir data/tiny \
   --train-ratio 0.9 \
@@ -105,7 +96,7 @@ data/tiny/
 检查数据加载和 batch 构造：
 
 ```bash
-python check_data_loader.py --data-dir data/tiny
+python tools/data/check_data_loader.py --data-dir data/tiny
 ```
 
 这个脚本会同时检查 tokenizer 数据和字符级数据，并验证 causal LM 的 `x/y` 是否满足向后错一位的训练目标。
@@ -285,7 +276,7 @@ USE_MPS=1 python sample.py \
 可以用 `run_ablation.py` 批量运行多组结构对比：
 
 ```bash
-python run_ablation.py \
+python tools/experiments/run_ablation.py \
   --max-iters 200 \
   --eval-interval 20 \
   --eval-iters 5 \
@@ -316,13 +307,13 @@ out/ablation/
 使用 MPS：
 
 ```bash
-python run_ablation.py --use-mps --out-dir out/ablation
+python tools/experiments/run_ablation.py --use-mps --out-dir out/ablation
 ```
 
 也可以一键完成消融训练、结果汇总和绘图：
 
 ```bash
-python run_full_ablation.py \
+python tools/experiments/run_full_ablation.py \
   --out-dir out/ablation \
   --max-iters 200 \
   --eval-interval 20 \
@@ -332,7 +323,7 @@ python run_full_ablation.py \
 汇总消融实验：
 
 ```bash
-python summarize_ablation.py --root out/ablation
+python tools/experiments/summarize_ablation.py --root out/ablation
 ```
 
 会生成：
@@ -344,7 +335,7 @@ out/ablation/summary.csv
 批量绘制每组实验的 loss 曲线：
 
 ```bash
-python plot_ablation.py --root out/ablation
+python tools/plots/plot_ablation.py --root out/ablation
 ```
 
 会在每个实验目录下生成：
@@ -356,7 +347,7 @@ loss.png
 绘制消融实验总览图：
 
 ```bash
-python plot_ablation_summary.py --summary out/ablation/summary.csv
+python tools/plots/plot_ablation_summary.py --summary out/ablation/summary.csv
 ```
 
 会生成：
@@ -449,7 +440,7 @@ out/xxx/
 Tokenizer 观察：
 
 ```bash
-python inspect_tokenizer.py --encoding gpt2
+python tools/data/inspect_tokenizer.py --encoding gpt2
 ```
 
 BPE 的核心思想是先从很小的基本符号开始，不断把语料中最常共同出现的相邻片段合并成新 token。高频英文词、常见空格加单词组合、常见数字或符号片段会更容易被合并；低频词、中文字符和专业术语可能会被拆成更多 token。
@@ -600,7 +591,7 @@ python scripts/build_astro_sft_tiny.py \
 检查数据格式：
 
 ```bash
-python check_sft_data.py \
+python tools/sft/check_sft_data.py \
   --path data/sft/astro_sft_tiny.jsonl
 ```
 
@@ -630,14 +621,14 @@ python scripts/build_astro_sft_small.py \
 检查 small 数据：
 
 ```bash
-python check_sft_data.py \
+python tools/sft/check_sft_data.py \
   --path data/sft/astro_sft_small.jsonl
 
-python check_sft_encoding.py \
+python tools/sft/check_sft_encoding.py \
   --path data/sft/astro_sft_small.jsonl \
   --encoding gpt2
 
-python check_sft_batch.py \
+python tools/sft/check_sft_batch.py \
   --path data/sft/astro_sft_small.jsonl \
   --encoding gpt2 \
   --batch-size 4
@@ -673,7 +664,7 @@ Answer:
 编码检查：
 
 ```bash
-python check_sft_encoding.py \
+python tools/sft/check_sft_encoding.py \
   --path data/sft/astro_sft_tiny.jsonl \
   --encoding gpt2
 ```
@@ -694,7 +685,7 @@ python check_sft_encoding.py \
 Batch padding 检查：
 
 ```bash
-python check_sft_batch.py \
+python tools/sft/check_sft_batch.py \
   --path data/sft/astro_sft_tiny.jsonl \
   --encoding gpt2 \
   --batch-size 4
@@ -781,7 +772,7 @@ step 15: train loss 7.1760, val loss 9.1227
 绘制 SFT loss 曲线：
 
 ```bash
-python plot_log.py \
+python tools/plots/plot_log.py \
   --log out/sft_eval_log_debug/log.csv \
   --out out/sft_eval_log_debug/loss.png
 ```
@@ -805,7 +796,7 @@ out/sft_eval_log_debug/loss.png
 对比 SFT 前后采样：
 
 ```bash
-python compare_sft_samples.py \
+python tools/eval/compare_sft_samples.py \
   --base-checkpoint out/astro_small_500/ckpt.pt \
   --sft-checkpoint out/sft_eval_log_debug/ckpt.pt \
   --out-dir out/sft_compare_samples \
@@ -910,11 +901,11 @@ step 275: train loss 1.7174, val loss 3.8776
 绘图和采样：
 
 ```bash
-python plot_log.py \
+python tools/plots/plot_log.py \
   --log out/sft_small_eos_300/log.csv \
   --out out/sft_small_eos_300/loss.png
 
-python compare_sft_samples.py \
+python tools/eval/compare_sft_samples.py \
   --base-checkpoint out/astro_small_500/ckpt.pt \
   --sft-checkpoint out/sft_small_eos_300/ckpt.pt \
   --out-dir out/sft_eos_compare \
@@ -935,7 +926,7 @@ python compare_sft_samples.py \
 SFT 生成诊断：
 
 ```bash
-python diagnose_sft_generation.py \
+python tools/eval/diagnose_sft_generation.py \
   --checkpoint out/sft_small_eos_300/ckpt.pt \
   --out-dir out/sft_generation_diagnostics \
   --max-new-tokens 80 \
@@ -998,7 +989,7 @@ python sample.py \
 对 repetition penalty 做诊断：
 
 ```bash
-python diagnose_sft_generation.py \
+python tools/eval/diagnose_sft_generation.py \
   --checkpoint out/sft_small_eos_300/ckpt.pt \
   --out-dir out/sft_generation_penalty_diagnostics \
   --max-new-tokens 80 \
@@ -1022,7 +1013,7 @@ penalty 2.0: eos 0/12, avg repeated bigram 0.064, max token run 9
 EOS 概率 / next-token 诊断：
 
 ```bash
-python diagnose_next_token.py \
+python tools/eval/diagnose_next_token.py \
   --checkpoint out/sft_small_eos_300/ckpt.pt \
   --sft-path data/sft/astro_sft_small.jsonl \
   --out-dir out/sft_next_token_diagnostics \
@@ -1114,14 +1105,14 @@ python sample.py \
   --repetition-penalty 1.5 \
   --stop-at-text "<END>"
 
-python diagnose_next_token.py \
+python tools/eval/diagnose_next_token.py \
   --checkpoint out/sft_small_end_300/ckpt.pt \
   --sft-path data/sft/astro_sft_small.jsonl \
   --out-dir out/sft_next_token_end_diagnostics \
   --max-per-task 2 \
   --top-k 15
 
-python diagnose_sft_generation.py \
+python tools/eval/diagnose_sft_generation.py \
   --checkpoint out/sft_small_end_300/ckpt.pt \
   --out-dir out/sft_generation_end_diagnostics \
   --max-new-tokens 80 \
@@ -1346,7 +1337,7 @@ SFT 质量评测：
 新增脚本：
 
 ```bash
-python evaluate_sft_quality.py \
+python tools/eval/evaluate_sft_quality.py \
   --checkpoint out/sft_small_stratified_eos_300/ckpt.pt \
   --sft-path data/sft/astro_sft_small.jsonl \
   --split val \
@@ -1377,7 +1368,7 @@ avg repeated bigram ratio: 0.629
 新增筛选脚本：
 
 ```bash
-python filter_sft_by_task.py \
+python tools/sft/filter_sft_by_task.py \
   --input data/sft/astro_sft_small.jsonl \
   --out data/sft/astro_sft_field.jsonl \
   --task field_extraction
@@ -1432,7 +1423,7 @@ step 275: train loss 0.9024, val loss 1.0884
 质量评测：
 
 ```bash
-python evaluate_sft_quality.py \
+python tools/eval/evaluate_sft_quality.py \
   --checkpoint out/sft_field_300/ckpt.pt \
   --sft-path data/sft/astro_sft_field.jsonl \
   --split val \
@@ -1522,7 +1513,7 @@ step 450: train loss 0.5595, val loss 0.5853
 质量评测：
 
 ```bash
-python evaluate_sft_quality.py \
+python tools/eval/evaluate_sft_quality.py \
   --checkpoint out/sft_field_500/ckpt.pt \
   --sft-path data/sft/astro_sft_field_500.jsonl \
   --split val \
@@ -1558,7 +1549,7 @@ field_500 token F1: 0.729
 新增脚本：
 
 ```bash
-python evaluate_field_accuracy.py \
+python tools/eval/evaluate_field_accuracy.py \
   --results out/sft_quality_field_500_val/results.csv \
   --out-dir out/field_accuracy_field_500
 ```
@@ -1670,7 +1661,7 @@ avg repeated bigram ratio: 0.001
 字段级评测：
 
 ```bash
-python evaluate_field_accuracy.py \
+python tools/eval/evaluate_field_accuracy.py \
   --results out/sft_quality_field_copy_500_val/results.csv \
   --out-dir out/field_accuracy_field_copy_500
 ```
@@ -1770,7 +1761,7 @@ avg repeated bigram ratio: 0.000
 字段级评测：
 
 ```bash
-python evaluate_field_accuracy.py \
+python tools/eval/evaluate_field_accuracy.py \
   --results out/sft_quality_value_copy_500_val/results.csv \
   --out-dir out/field_accuracy_value_copy_500
 ```
@@ -1801,7 +1792,7 @@ value copy 过拟合诊断：
 为了区分“模型完全不会复制数字”和“模型会记忆但不会泛化复制”，先评测 `value_copy_500` 的 train split：
 
 ```bash
-python evaluate_sft_quality.py \
+python tools/eval/evaluate_sft_quality.py \
   --checkpoint out/sft_value_copy_500/ckpt.pt \
   --sft-path data/sft/value_copy_500.jsonl \
   --split train \
@@ -1810,7 +1801,7 @@ python evaluate_sft_quality.py \
   --temperature 0.0 \
   --max-new-tokens 20
 
-python evaluate_field_accuracy.py \
+python tools/eval/evaluate_field_accuracy.py \
   --results out/sft_quality_value_copy_500_train/results.csv \
   --out-dir out/field_accuracy_value_copy_500_train
 ```

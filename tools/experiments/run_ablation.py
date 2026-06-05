@@ -1,3 +1,9 @@
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
 import argparse
 import subprocess
 import sys
@@ -14,7 +20,7 @@ args = parse_args()
 
 baseArgs = [
     sys.executable,
-    "train.py",
+    str(ROOT / "train.py"),
     "--max-iters", str(args.max_iters),
     "--eval-interval", str(args.eval_interval),
     "--eval-iters", str(args.eval_iters),
