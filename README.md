@@ -34,6 +34,7 @@
 ├── inspect_tokenizer.py  # 观察 tokenizer 的 token id 和文本切片
 ├── sample.py             # 从 checkpoint 加载模型并生成文本
 ├── compare_sft_samples.py # 对比 SFT 前后的 instruction 采样结果
+├── filter_sft_by_task.py # 按 task 筛选 SFT jsonl，构造单任务对照数据
 ├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
 ├── diagnose_next_token.py # 诊断 Answer 前后 next-token 分布和 EOS 排名
 ├── evaluate_sft_quality.py # 评测 SFT 回答质量、EOS 命中和重复率
@@ -1364,6 +1365,99 @@ avg repeated bigram ratio: 0.629
 ```
 
 这个结果说明：模型已经基本学会“在哪里停”，但还没有学会“答对”。下一步的主要矛盾不是 EOS，而是 SFT 数据质量、任务混合方式和模型容量。
+
+单任务 field extraction 对照：
+
+为了判断“回答质量差”到底是多任务混合导致，还是模型整体能力不足，可以先只训练一个最结构化的任务：`field_extraction`。
+
+新增筛选脚本：
+
+```bash
+python filter_sft_by_task.py \
+  --input data/sft/astro_sft_small.jsonl \
+  --out data/sft/astro_sft_field.jsonl \
+  --task field_extraction
+```
+
+生成结果：
+
+```text
+loaded examples: 200
+saved examples: 40
+tasks: {'field_extraction': 40}
+```
+
+检查结果：
+
+```text
+examples: 40
+avg prompt tokens: 50.7
+avg answer tokens: 23.7
+max total tokens: 81
+end token ids: [50256]
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field.jsonl \
+  --split-mode stratified \
+  --max-iters 300 \
+  --eval-interval 25 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_field_300
+```
+
+训练结果：
+
+```text
+train tasks: {'field_extraction': 36}
+val tasks: {'field_extraction': 4}
+step 0: train loss 6.9630, val loss 6.9324
+step 75: train loss 4.0012, val loss 4.1432
+step 150: train loss 2.2541, val loss 2.4979
+step 225: train loss 1.3465, val loss 1.5070
+step 275: train loss 0.9024, val loss 1.0884
+```
+
+质量评测：
+
+```bash
+python evaluate_sft_quality.py \
+  --checkpoint out/sft_field_300/ckpt.pt \
+  --sft-path data/sft/astro_sft_field.jsonl \
+  --split val \
+  --split-mode stratified \
+  --out-dir out/sft_quality_field_val \
+  --temperature 0.0 \
+  --max-new-tokens 80
+```
+
+结果：
+
+```text
+examples: 4
+eos rate: 100.00%
+exact match: 0.00%
+avg token F1: 0.453
+avg target recall: 0.325
+avg char similarity: 0.486
+avg repeated bigram ratio: 0.000
+```
+
+对比：
+
+```text
+多任务 SFT 的 field_extraction token F1: 0.303
+单任务 field_extraction token F1: 0.453
+```
+
+结论：单任务训练明显改善了结构化抽取能力，说明多任务混合确实会干扰这个小模型。但预测仍然经常把 station/value 记错，例如目标是 `KOKEE`，模型输出 `BJFS` 或 `WETTZELL`。这说明下一步不应急着上 DPO，而应先扩大和重构 SFT 数据，尤其是字段抽取这种可验证任务。
 
 这一步把二阶段主线接起来：
 
