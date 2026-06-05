@@ -1796,6 +1796,81 @@ prediction: value: 12.5
 
 结论：即使任务简化到只复制一个 value，模型也只有 6% exact match。这说明当前 6.57M 参数的小模型、当前预训练和 SFT 设置下，数字复制是明确瓶颈。后续如果要继续研究这个方向，应该优先尝试三件事：增加模型容量、增加训练步数/数据重复、或把数字拆成更稳定的字符级/格式化 token 任务，而不是直接进入 DPO。
 
+value copy 过拟合诊断：
+
+为了区分“模型完全不会复制数字”和“模型会记忆但不会泛化复制”，先评测 `value_copy_500` 的 train split：
+
+```bash
+python evaluate_sft_quality.py \
+  --checkpoint out/sft_value_copy_500/ckpt.pt \
+  --sft-path data/sft/value_copy_500.jsonl \
+  --split train \
+  --split-mode stratified \
+  --out-dir out/sft_quality_value_copy_500_train \
+  --temperature 0.0 \
+  --max-new-tokens 20
+
+python evaluate_field_accuracy.py \
+  --results out/sft_quality_value_copy_500_train/results.csv \
+  --out-dir out/field_accuracy_value_copy_500_train
+```
+
+结果：
+
+```text
+train examples: 450
+train exact match: 7.11%
+train value accuracy: 7.11%
+```
+
+这说明 500 条训练集本身也没有被稳定记住。
+
+接着构造 20 条小样本：
+
+```bash
+python scripts/build_value_copy_sft.py \
+  --out data/sft/value_copy_20.jsonl \
+  --num-examples 20
+```
+
+过拟合训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/value_copy_20.jsonl \
+  --split-mode stratified \
+  --max-iters 2000 \
+  --eval-interval 200 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 64 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_value_copy_20_overfit
+```
+
+训练结果：
+
+```text
+train examples: 18
+val examples: 2
+step 0: train loss 8.3131, val loss 8.9043
+step 600: train loss 0.1790, val loss 3.2299
+step 1200: train loss 0.0198, val loss 2.2073
+step 1800: train loss 0.0072, val loss 3.8369
+```
+
+过拟合评测：
+
+```text
+train exact match: 100.00%
+train value accuracy: 100.00%
+val exact match: 50.00%
+val value accuracy: 50.00%
+```
+
+结论：模型可以记住 20 条 value copy 样本，因此不是“完全不能输出数字”。但在 500 条组合上，训练集 accuracy 也只有约 7%，说明当前设置没有学到稳定的复制规则，而是在少量样本上可以记忆。下一步可以做两个方向的对照：一是增加模型容量看复制规则是否出现，二是把数字复制改成字符级任务，减少 tokenizer 对小数和负号的干扰。
+
 这一步把二阶段主线接起来：
 
 ```text
