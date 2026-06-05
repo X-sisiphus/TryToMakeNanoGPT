@@ -38,6 +38,7 @@
 ├── diagnose_sft_generation.py # 诊断 SFT 生成长度、EOS 命中和重复率
 ├── diagnose_next_token.py # 诊断 Answer 前后 next-token 分布和 EOS 排名
 ├── evaluate_sft_quality.py # 评测 SFT 回答质量、EOS 命中和重复率
+├── evaluate_field_accuracy.py # 评测字段抽取中 station/signal/value/unit 准确率
 ├── plot_log.py           # 根据 log.csv 绘制 loss 曲线
 ├── plot_ablation.py      # 批量绘制消融实验 loss 曲线
 ├── plot_ablation_summary.py # 绘制消融实验总览图
@@ -1549,6 +1550,46 @@ field_500 token F1: 0.729
 ```
 
 结论：扩大高质量、可验证的单任务数据显著提升了小模型的结构化抽取能力。它已经学会了输出字段格式、命中 EOS、减少重复，但 exact match 仍为 0，最低分样例里还会把 `clock bias` 预测成 `north displacement`，或把数值预测成训练集中常见的其他值。下一步应该增加字段级评测，例如分别计算 station、signal、value、unit 的准确率，而不是只看 token F1。
+
+字段级准确率评测：
+
+新增脚本：
+
+```bash
+python evaluate_field_accuracy.py \
+  --results out/sft_quality_field_500_val/results.csv \
+  --out-dir out/field_accuracy_field_500
+```
+
+这个脚本会解析 target 和 prediction 中的四个字段：
+
+```text
+station
+signal
+value
+unit
+```
+
+field_500 结果：
+
+```text
+total: 50
+station accuracy: 20.00%
+signal accuracy: 76.00%
+value accuracy: 2.00%
+unit accuracy: 68.00%
+all fields accuracy: 0.00%
+avg correct fields: 1.66/4
+```
+
+解释：
+
+- `signal` 和 `unit` 相对较高，说明模型已经学会了一部分字段类型和单位模式
+- `station` 很低，说明模型没有稳定复制输入里的站名，而是在训练集中常见站名之间猜
+- `value` 几乎为 0，说明模型没有学会精确复制数值，经常生成另一个训练集中出现过的数值
+- `all fields accuracy` 为 0，说明 token F1 的提升主要来自格式和部分字段相似，不等于真正完成字段抽取
+
+这个结果把下一步方向变得很清楚：继续扩数据不是唯一重点，还要让任务更强调“从输入复制字段”。后续可以做两类改进：一是加入更多数字和站名组合，二是把输出格式改成更严格的 JSON，再做字段级 exact-match 评测。
 
 这一步把二阶段主线接起来：
 
