@@ -46,6 +46,7 @@
 ├── run_full_ablation.py  # 一键运行消融、汇总和绘图
 ├── summarize_ablation.py # 汇总多组消融实验的最终指标
 ├── scripts/build_field_sft.py # 生成 field_extraction 可验证 SFT 数据
+├── scripts/build_field_copy_sft.py # 生成结构化 copy 型字段抽取数据
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
 └── README.md
 ```
@@ -1590,6 +1591,111 @@ avg correct fields: 1.66/4
 - `all fields accuracy` 为 0，说明 token F1 的提升主要来自格式和部分字段相似，不等于真正完成字段抽取
 
 这个结果把下一步方向变得很清楚：继续扩数据不是唯一重点，还要让任务更强调“从输入复制字段”。后续可以做两类改进：一是加入更多数字和站名组合，二是把输出格式改成更严格的 JSON，再做字段级 exact-match 评测。
+
+复制型 field extraction 对照：
+
+为了排查上一版自然语言输入是否太难，新增 copy 型数据。输入直接写成结构化字段：
+
+```text
+signal=zenith wet delay; station=YEBES40M; unit=mm; value=38.5
+```
+
+输出仍然保持原格式：
+
+```text
+station: YEBES40M
+signal: zenith wet delay
+value: 38.5
+unit: mm
+```
+
+新增脚本：
+
+```bash
+python scripts/build_field_copy_sft.py \
+  --out data/sft/astro_sft_field_copy_500.jsonl \
+  --num-examples 500
+```
+
+数据检查：
+
+```text
+examples: 500
+avg prompt tokens: 50.6
+avg answer tokens: 23.4
+max total tokens: 82
+end token ids: [50256]
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_field_copy_500
+```
+
+训练结果：
+
+```text
+train examples: 450
+val examples: 50
+step 0: train loss 7.1168, val loss 7.2219
+step 150: train loss 2.6001, val loss 2.6686
+step 300: train loss 0.9770, val loss 1.0082
+step 450: train loss 0.5620, val loss 0.5942
+```
+
+质量评测：
+
+```text
+examples: 50
+eos rate: 100.00%
+exact match: 0.00%
+avg token F1: 0.738
+avg target recall: 0.741
+avg char similarity: 0.860
+avg repeated bigram ratio: 0.001
+```
+
+字段级评测：
+
+```bash
+python evaluate_field_accuracy.py \
+  --results out/sft_quality_field_copy_500_val/results.csv \
+  --out-dir out/field_accuracy_field_copy_500
+```
+
+结果：
+
+```text
+station accuracy: 32.00%
+signal accuracy: 62.00%
+value accuracy: 0.00%
+unit accuracy: 90.00%
+all fields accuracy: 0.00%
+avg correct fields: 1.84/4
+```
+
+和自然语言 field_500 对比：
+
+```text
+自然语言 field_500:
+station 20%, signal 76%, value 2%, unit 68%, all fields 0%
+
+复制型 field_copy_500:
+station 32%, signal 62%, value 0%, unit 90%, all fields 0%
+```
+
+结论：把输入改成结构化 copy 格式，并没有真正解决精确复制问题。它让 `station` 小幅提升、`unit` 明显提升，但 `value` 仍然几乎完全失败。说明当前瓶颈不只是“自然语言输入太难”，而是这个小模型在当前训练规模下对数字和实体的逐字复制能力不足。下一步更应该做 copy 机制压力测试：从最简单的 `value=2.4 -> value: 2.4` 开始，只训练一个字段，确认模型到底能不能复制数字。
 
 这一步把二阶段主线接起来：
 
