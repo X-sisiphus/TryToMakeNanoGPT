@@ -2081,6 +2081,85 @@ value accuracy: 80.00%
 
 结论：curriculum 明显有效。先让模型在 digit-spaced 任务中学习更接近字符级的复制，再切回普通数字格式，可以把普通 value copy 的准确率从 6% 提升到 80%。这说明小模型不是完全不能学数字复制，而是需要更合适的数据路径和中间任务。
 
+四字段 digit-spaced field copy：
+
+为了把 value-only curriculum 迁移到完整字段抽取，构造了一个四字段 copy 任务，只把 value 改成 digit-spaced，其他字段保持正常：
+
+```text
+station / signal / value / unit
+value: 38.5 -> value: 3 8 . 5
+```
+
+数据构造：
+
+```bash
+python scripts/build_digit_spaced_field_copy_sft.py \
+  --out data/sft/astro_sft_field_copy_spaced_500.jsonl \
+  --num-examples 500
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_spaced_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_field_copy_spaced_500
+```
+
+训练曲线：
+
+```text
+step 0: train loss 7.4365, val loss 7.5259
+step 150: train loss 2.7229, val loss 2.7283
+step 300: train loss 0.9989, val loss 1.0235
+step 450: train loss 0.5787, val loss 0.6121
+```
+
+评测：
+
+```bash
+python tools/eval/evaluate_sft_quality.py \
+  --checkpoint out/sft_field_copy_spaced_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_spaced_500.jsonl \
+  --split val \
+  --split-mode stratified \
+  --out-dir out/sft_quality_field_copy_spaced_500_val \
+  --temperature 0.0 \
+  --max-new-tokens 80
+
+python tools/eval/evaluate_field_accuracy.py \
+  --results out/sft_quality_field_copy_spaced_500_val/results.csv \
+  --out-dir out/field_accuracy_field_copy_spaced_500
+```
+
+结果：
+
+```text
+eos rate: 100.00%
+exact match: 0.00%
+avg token F1: 0.634
+avg target recall: 0.643
+
+station accuracy: 10.00%
+signal accuracy: 20.00%
+value accuracy: 0.00%
+unit accuracy: 66.00%
+all fields accuracy: 0.00%
+avg correct fields: 0.96/4
+```
+
+观察：虽然 loss 降得很顺，但生成时出现了模式坍缩，模型经常输出训练中常见的字段组合，例如 `NYALES20 / zenith wet delay / 2 . 5 / mm`。对 train split 抽样评测也是 0% exact match，说明这不是验证集泛化问题，而是四字段 copy 对当前小模型和训练设置仍然偏难。
+
+结论：value-only curriculum 成功，但直接扩展到 500 条、10 个 station、7 类 signal 的四字段任务跨度太大。下一步应该加一层更小的课程，例如 20 条过拟合或 tiny field copy，先验证模型能否记住并复制完整四字段格式。
+
 这一步把二阶段主线接起来：
 
 ```text
