@@ -2362,6 +2362,117 @@ all fields accuracy: 60.00%
 
 结论：当前 curriculum 的断点基本定位在 100 到 250 之间。模型可以学会四字段 digit-spaced copy，但当类别组合和数值组合扩大后，value 复制最先退化。下一步可以选择两条路线：一是继续训练 medium 250 更久，看是否只是训练步数不足；二是把 250 拆成更细的课程，例如先扩大 station，再扩大 signal，最后扩大 value。
 
+factor field copy 250：
+
+为了判断到底是谁把模型压垮，构造三组 factor 实验。三组都使用 250 条 digit-spaced field copy，并且都从 `out/sft_small_field_copy_spaced_100/ckpt.pt` 继续训练。
+
+三组变量：
+
+```text
+station factor: 10 个 station，保持 3 类 signal
+signal factor: 5 个 station，扩大到 7 类 signal
+value factor: 5 个 station，3 类 signal，但扩大 value 取值
+```
+
+数据构造：
+
+```bash
+python scripts/build_factor_field_copy_sft.py \
+  --mode station \
+  --out data/sft/factor_station_field_copy_spaced_250.jsonl \
+  --num-examples 250 \
+  --digit-spaced
+
+python scripts/build_factor_field_copy_sft.py \
+  --mode signal \
+  --out data/sft/factor_signal_field_copy_spaced_250.jsonl \
+  --num-examples 250 \
+  --digit-spaced
+
+python scripts/build_factor_field_copy_sft.py \
+  --mode value \
+  --out data/sft/factor_value_field_copy_spaced_250.jsonl \
+  --num-examples 250 \
+  --digit-spaced
+```
+
+训练命令结构一致：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_small_field_copy_spaced_100/ckpt.pt \
+  --sft-path data/sft/factor_${mode}_field_copy_spaced_250.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_factor_${mode}_field_copy_spaced_250
+```
+
+验证集结果：
+
+```text
+station factor:
+exact match: 92.00%
+station accuracy: 96.00%
+signal accuracy: 96.00%
+value accuracy: 96.00%
+unit accuracy: 96.00%
+all fields accuracy: 92.00%
+
+signal factor:
+exact match: 88.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 88.00%
+unit accuracy: 100.00%
+all fields accuracy: 88.00%
+
+value factor:
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+对比 medium 250：
+
+```text
+medium 250 full combination:
+all fields accuracy: 60.00%
+value accuracy: 72.00%
+
+station-only expansion:
+all fields accuracy: 92.00%
+
+signal-only expansion:
+all fields accuracy: 88.00%
+
+value-only expansion:
+all fields accuracy: 100.00%
+```
+
+结论：压垮模型的不是单独扩大 value。相反，只在固定 station/signal 空间里增加 value，模型仍然可以 100% 复制。单独扩大 station 或 signal 也能保持较高准确率。真正的问题是组合空间同时扩大：更多 station、更多 signal、更多 value 同时出现时，小模型容易把字段组合混在一起，尤其表现为 value 复制错误和 station/signal 混淆。
+
+这说明后续 curriculum 不能只按样本数递增，而应该按组合复杂度递增。例如：
+
+```text
+small 100
+-> station factor
+-> signal factor
+-> value factor
+-> station + signal
+-> signal + value
+-> full medium
+-> full 500
+```
+
 这一步把二阶段主线接起来：
 
 ```text
