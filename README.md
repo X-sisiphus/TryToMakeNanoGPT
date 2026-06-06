@@ -2296,6 +2296,72 @@ all fields accuracy: 100.00%
 
 观察：small 100 已经基本学会四字段 digit-spaced copy。训练集中少量错误集中在 value 上，station、signal、unit 都达到 100%。这说明课程台阶有效，模型能力断点不在 20 到 100 之间，而更可能出现在 100 到 500 之间，或者出现在类别数、模板数、数值组合同时扩张时。
 
+medium field copy 250：
+
+继续把样本数扩大到 250 条。这里复用完整四字段 digit-spaced 数据构造脚本，类别范围回到 10 个 station、7 类 signal、完整 value 集合，但样本数先控制在 250。
+
+数据构造：
+
+```bash
+python scripts/build_digit_spaced_field_copy_sft.py \
+  --out data/sft/medium_field_copy_spaced_250.jsonl \
+  --num-examples 250
+```
+
+训练从 small 100 checkpoint 继续：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_small_field_copy_spaced_100/ckpt.pt \
+  --sft-path data/sft/medium_field_copy_spaced_250.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_medium_field_copy_spaced_250
+```
+
+训练曲线：
+
+```text
+step 0: train loss 3.7820, val loss 3.1516
+step 300: train loss 0.3794, val loss 0.4244
+step 600: train loss 0.1432, val loss 0.2371
+step 900: train loss 0.0673, val loss 0.1091
+```
+
+训练集结果：
+
+```text
+examples: 225
+exact match: 77.33%
+station accuracy: 88.44%
+signal accuracy: 95.11%
+value accuracy: 90.22%
+unit accuracy: 96.89%
+all fields accuracy: 77.33%
+```
+
+验证集结果：
+
+```text
+examples: 25
+exact match: 60.00%
+station accuracy: 88.00%
+signal accuracy: 92.00%
+value accuracy: 72.00%
+unit accuracy: 100.00%
+all fields accuracy: 60.00%
+```
+
+观察：medium 250 已经明显比 full 500 的直接训练好，但相比 small 100 出现下降。错误主要集中在 value，其次是 station 和 signal 混淆。unit 最稳定，因为它的取值空间最小，并且和 signal 有强绑定关系。
+
+结论：当前 curriculum 的断点基本定位在 100 到 250 之间。模型可以学会四字段 digit-spaced copy，但当类别组合和数值组合扩大后，value 复制最先退化。下一步可以选择两条路线：一是继续训练 medium 250 更久，看是否只是训练步数不足；二是把 250 拆成更细的课程，例如先扩大 station，再扩大 signal，最后扩大 value。
+
 这一步把二阶段主线接起来：
 
 ```text
