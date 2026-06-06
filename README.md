@@ -1862,6 +1862,63 @@ val value accuracy: 50.00%
 
 结论：模型可以记住 20 条 value copy 样本，因此不是“完全不能输出数字”。但在 500 条组合上，训练集 accuracy 也只有约 7%，说明当前设置没有学到稳定的复制规则，而是在少量样本上可以记忆。下一步可以做两个方向的对照：一是增加模型容量看复制规则是否出现，二是把数字复制改成字符级任务，减少 tokenizer 对小数和负号的干扰。
 
+数值 tokenizer 诊断：
+
+为了确认数字复制为什么难，新增脚本观察 GPT-2 tokenizer 如何切分小数和负数：
+
+```bash
+python tools/data/inspect_value_tokens.py \
+  --encoding gpt2
+```
+
+典型结果：
+
+```text
+text: -10.5
+ids: [12, 940, 13, 20]
+pieces: ['-', '10', '.', '5']
+num tokens: 4
+
+text: 12.5
+ids: [1065, 13, 20]
+pieces: ['12', '.', '5']
+num tokens: 3
+
+text: 52.2
+ids: [4309, 13, 17]
+pieces: ['52', '.', '2']
+num tokens: 3
+```
+
+带输入/输出前缀后，token 边界还会变化：
+
+```text
+text: value: -10.5
+ids: [8367, 25, 532, 940, 13, 20]
+pieces: ['value', ':', ' -', '10', '.', '5']
+num tokens: 6
+
+text: value=-10.5
+ids: [8367, 10779, 940, 13, 20]
+pieces: ['value', '=-', '10', '.', '5']
+num tokens: 5
+```
+
+解释：
+
+- 负号、小数点、整数部分和小数部分经常被拆成多个 token
+- `value=-10.5` 和 `value: -10.5` 的 token 边界不同，输入里的 `=-` 到输出里的 ` -` 不是同一个 token
+- 模型要学的不是简单复制字符串，而是把一种 token 切分转换成另一种 token 切分
+
+这解释了为什么 value copy 很难。下一步更合理的实验是 digit-spaced copy，例如：
+
+```text
+Input:  value = - 1 0 . 5
+Answer: value: - 1 0 . 5
+```
+
+这样可以把任务改成更接近字符级复制，减少 GPT-2 BPE 对数字边界的干扰。
+
 这一步把二阶段主线接起来：
 
 ```text
