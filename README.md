@@ -2014,6 +2014,73 @@ value accuracy: 50.00%
 
 结论：把数字拆成更接近字符级的形式后，value exact match 从 6% 提升到 50%。这说明 GPT-2 BPE 对数字的切分确实是复制困难的重要来源。它还没有到 100%，说明小模型的复制规则仍然不稳，但方向已经成立。下一步可以做 curriculum：先 digit-spaced，再逐步回到普通数字格式。
 
+digit-spaced -> normal curriculum：
+
+为了验证 digit-spaced 学到的复制能力能否迁移回普通数字格式，做两阶段 curriculum：
+
+```text
+Stage 1: digit-spaced value copy
+Stage 2: normal value copy
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_value_copy_spaced_500/ckpt.pt \
+  --sft-path data/sft/value_copy_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 64 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_value_copy_curriculum_500
+```
+
+评测：
+
+```bash
+python tools/eval/evaluate_sft_quality.py \
+  --checkpoint out/sft_value_copy_curriculum_500/ckpt.pt \
+  --sft-path data/sft/value_copy_500.jsonl \
+  --split val \
+  --split-mode stratified \
+  --out-dir out/sft_quality_value_copy_curriculum_500_val \
+  --temperature 0.0 \
+  --max-new-tokens 20
+
+python tools/eval/evaluate_field_accuracy.py \
+  --results out/sft_quality_value_copy_curriculum_500_val/results.csv \
+  --out-dir out/field_accuracy_value_copy_curriculum_500
+```
+
+结果：
+
+```text
+eos rate: 100.00%
+exact match: 80.00%
+avg token F1: 0.900
+avg target recall: 0.900
+value accuracy: 80.00%
+```
+
+对比：
+
+```text
+normal value_copy_500:
+value accuracy: 6.00%
+
+digit-spaced value_copy_500:
+value accuracy: 50.00%
+
+digit-spaced -> normal curriculum:
+value accuracy: 80.00%
+```
+
+结论：curriculum 明显有效。先让模型在 digit-spaced 任务中学习更接近字符级的复制，再切回普通数字格式，可以把普通 value copy 的准确率从 6% 提升到 80%。这说明小模型不是完全不能学数字复制，而是需要更合适的数据路径和中间任务。
+
 这一步把二阶段主线接起来：
 
 ```text
