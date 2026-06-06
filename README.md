@@ -1919,6 +1919,101 @@ Answer: value: - 1 0 . 5
 
 这样可以把任务改成更接近字符级复制，减少 GPT-2 BPE 对数字边界的干扰。
 
+digit-spaced value copy：
+
+为了验证 tokenizer 数字切分是否是核心问题之一，构造空格拆分数字的数据：
+
+```text
+Input:
+reported value is 8 . 0
+
+Answer:
+value: 8 . 0
+```
+
+新增脚本：
+
+```bash
+python scripts/build_digit_spaced_value_copy_sft.py \
+  --out data/sft/value_copy_spaced_500.jsonl \
+  --num-examples 500
+```
+
+数据检查：
+
+```text
+examples: 500
+avg prompt tokens: 29.0
+avg answer tokens: 6.7
+max total tokens: 40
+end token ids: [50256]
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/value_copy_spaced_500.jsonl \
+  --split-mode stratified \
+  --max-iters 500 \
+  --eval-interval 50 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 64 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_value_copy_spaced_500
+```
+
+训练结果：
+
+```text
+train examples: 450
+val examples: 50
+step 0: train loss 9.2266, val loss 9.2176
+step 150: train loss 2.4809, val loss 2.4978
+step 300: train loss 1.0153, val loss 1.0698
+step 450: train loss 0.5667, val loss 0.5860
+```
+
+质量评测：
+
+```text
+examples: 50
+eos rate: 100.00%
+exact match: 50.00%
+avg token F1: 0.864
+avg target recall: 0.868
+avg char similarity: 0.944
+avg repeated bigram ratio: 0.000
+```
+
+字段级评测：
+
+```bash
+python tools/eval/evaluate_field_accuracy.py \
+  --results out/sft_quality_value_copy_spaced_500_val/results.csv \
+  --out-dir out/field_accuracy_value_copy_spaced_500
+```
+
+结果：
+
+```text
+value accuracy: 50.00%
+```
+
+对比：
+
+```text
+普通 value_copy_500:
+value accuracy: 6.00%
+
+digit-spaced value_copy_500:
+value accuracy: 50.00%
+```
+
+结论：把数字拆成更接近字符级的形式后，value exact match 从 6% 提升到 50%。这说明 GPT-2 BPE 对数字的切分确实是复制困难的重要来源。它还没有到 100%，说明小模型的复制规则仍然不稳，但方向已经成立。下一步可以做 curriculum：先 digit-spaced，再逐步回到普通数字格式。
+
 这一步把二阶段主线接起来：
 
 ```text
