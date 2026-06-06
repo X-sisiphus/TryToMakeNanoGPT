@@ -2473,6 +2473,87 @@ small 100
 -> full 500
 ```
 
+double factor field copy 250：
+
+继续做双因素实验，判断两个变量同时扩大时模型是否开始明显退化。
+
+新增两组：
+
+```text
+station_signal: 10 个 station + 7 类 signal
+signal_value: 5 个 station + 7 类 signal + 更多 value
+```
+
+数据构造：
+
+```bash
+python scripts/build_factor_field_copy_sft.py \
+  --mode station_signal \
+  --out data/sft/factor_station_signal_field_copy_spaced_250.jsonl \
+  --num-examples 250 \
+  --digit-spaced
+
+python scripts/build_factor_field_copy_sft.py \
+  --mode signal_value \
+  --out data/sft/factor_signal_value_field_copy_spaced_250.jsonl \
+  --num-examples 250 \
+  --digit-spaced
+```
+
+训练仍然从 small 100 checkpoint 继续：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_small_field_copy_spaced_100/ckpt.pt \
+  --sft-path data/sft/factor_${mode}_field_copy_spaced_250.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_factor_${mode}_field_copy_spaced_250
+```
+
+验证集结果：
+
+```text
+station_signal:
+exact match: 72.00%
+station accuracy: 88.00%
+signal accuracy: 96.00%
+value accuracy: 76.00%
+unit accuracy: 100.00%
+all fields accuracy: 72.00%
+
+signal_value:
+exact match: 68.00%
+station accuracy: 100.00%
+signal accuracy: 88.00%
+value accuracy: 72.00%
+unit accuracy: 88.00%
+all fields accuracy: 68.00%
+```
+
+和单因素对比：
+
+```text
+station-only: 92.00%
+signal-only: 88.00%
+value-only: 100.00%
+
+station + signal: 72.00%
+signal + value: 68.00%
+
+full medium 250: 60.00%
+```
+
+结论：双因素组合已经明显比单因素更难。`signal + value` 组合尤其容易让 value 出错，因为 signal、unit、value 分布之间存在绑定关系，模型需要同时记住“这个 signal 通常对应什么 unit 和什么 value 空间”，再从 input 里复制具体 value。小模型在这个组合泛化上开始不稳。
+
+目前更准确的判断是：模型不是被 value 字符串本身压垮，而是被跨字段组合关系压垮。value 是最终出错最多的字段，但根因是 station/signal/value 同时组合时的干扰。
+
 这一步把二阶段主线接起来：
 
 ```text

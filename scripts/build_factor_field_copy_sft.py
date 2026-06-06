@@ -71,7 +71,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["station", "signal", "value"],
+        choices=["station", "signal", "value", "station_signal", "signal_value"],
         required=True,
     )
     parser.add_argument("--out", type=str, required=True)
@@ -90,6 +90,12 @@ def select_space(mode):
 
     if mode == "value":
         return BASE_STATIONS, VALUE_STRESS_SIGNALS
+
+    if mode == "station_signal":
+        return FULL_STATIONS, FULL_SIGNALS
+
+    if mode == "signal_value":
+        return BASE_STATIONS, VALUE_STRESS_SIGNALS + FULL_SIGNALS
 
     raise ValueError(f"unknown mode: {mode}")
 
