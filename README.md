@@ -2160,6 +2160,77 @@ avg correct fields: 0.96/4
 
 结论：value-only curriculum 成功，但直接扩展到 500 条、10 个 station、7 类 signal 的四字段任务跨度太大。下一步应该加一层更小的课程，例如 20 条过拟合或 tiny field copy，先验证模型能否记住并复制完整四字段格式。
 
+tiny field copy overfit：
+
+为了判断模型是否具备四字段复制能力，先做一个极小数据集，只包含 3 个 station、2 类 signal、20 条 digit-spaced field copy 样本。这一步不测泛化，只测模型能否在训练集上过拟合。
+
+数据构造：
+
+```bash
+python scripts/build_tiny_field_copy_sft.py \
+  --out data/sft/tiny_field_copy_spaced_20.jsonl \
+  --num-examples 20 \
+  --digit-spaced
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/astro_small_500/ckpt.pt \
+  --sft-path data/sft/tiny_field_copy_spaced_20.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.95 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_tiny_field_copy_spaced_20_overfit
+```
+
+训练曲线：
+
+```text
+step 0: train loss 6.9762, val loss 6.9690
+step 300: train loss 0.4275, val loss 0.4979
+step 600: train loss 0.0840, val loss 0.1923
+step 900: train loss 0.0184, val loss 0.1812
+```
+
+训练集评测：
+
+```bash
+python tools/eval/evaluate_sft_quality.py \
+  --checkpoint out/sft_tiny_field_copy_spaced_20_overfit/ckpt.pt \
+  --sft-path data/sft/tiny_field_copy_spaced_20.jsonl \
+  --split train \
+  --split-mode shuffle \
+  --train-ratio 0.95 \
+  --out-dir out/sft_quality_tiny_field_copy_spaced_20_train \
+  --temperature 0.0 \
+  --max-new-tokens 80
+
+python tools/eval/evaluate_field_accuracy.py \
+  --results out/sft_quality_tiny_field_copy_spaced_20_train/results.csv \
+  --out-dir out/field_accuracy_tiny_field_copy_spaced_20_train
+```
+
+结果：
+
+```text
+examples: 19
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+结论：模型具备四字段复制能力，20 条 tiny digit-spaced field copy 可以完全过拟合。500 条失败不是因为模型完全不会格式，而是因为从 20 条可记忆任务到 500 条多类别组合任务跨度太大。下一步应该做 100 条 small field copy，观察能力从记忆走向泛化时在哪个规模开始下降。
+
 这一步把二阶段主线接起来：
 
 ```text
