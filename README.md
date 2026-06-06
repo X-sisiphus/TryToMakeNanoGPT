@@ -2231,6 +2231,71 @@ all fields accuracy: 100.00%
 
 结论：模型具备四字段复制能力，20 条 tiny digit-spaced field copy 可以完全过拟合。500 条失败不是因为模型完全不会格式，而是因为从 20 条可记忆任务到 500 条多类别组合任务跨度太大。下一步应该做 100 条 small field copy，观察能力从记忆走向泛化时在哪个规模开始下降。
 
+small field copy 100：
+
+为了继续扩大 curriculum 台阶，从 20 条 tiny field copy 扩展到 100 条 small field copy。这个数据集包含 5 个 station、3 类 signal、3 种输入模板，value 仍然使用 digit-spaced 格式。
+
+数据构造：
+
+```bash
+python scripts/build_small_field_copy_sft.py \
+  --out data/sft/small_field_copy_spaced_100.jsonl \
+  --num-examples 100 \
+  --digit-spaced
+```
+
+训练从 tiny overfit checkpoint 继续：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_tiny_field_copy_spaced_20_overfit/ckpt.pt \
+  --sft-path data/sft/small_field_copy_spaced_100.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_small_field_copy_spaced_100
+```
+
+训练曲线：
+
+```text
+step 0: train loss 2.3850, val loss 2.4909
+step 300: train loss 0.1201, val loss 0.1306
+step 600: train loss 0.0270, val loss 0.0437
+step 900: train loss 0.0116, val loss 0.0140
+```
+
+训练集结果：
+
+```text
+examples: 90
+exact match: 97.78%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 97.78%
+unit accuracy: 100.00%
+all fields accuracy: 97.78%
+```
+
+验证集结果：
+
+```text
+examples: 10
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+观察：small 100 已经基本学会四字段 digit-spaced copy。训练集中少量错误集中在 value 上，station、signal、unit 都达到 100%。这说明课程台阶有效，模型能力断点不在 20 到 100 之间，而更可能出现在 100 到 500 之间，或者出现在类别数、模板数、数值组合同时扩张时。
+
 这一步把二阶段主线接起来：
 
 ```text
