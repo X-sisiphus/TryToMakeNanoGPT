@@ -2554,6 +2554,73 @@ full medium 250: 60.00%
 
 目前更准确的判断是：模型不是被 value 字符串本身压垮，而是被跨字段组合关系压垮。value 是最终出错最多的字段，但根因是 station/signal/value 同时组合时的干扰。
 
+full 500 after factor curriculum：
+
+在定位到组合泛化问题之后，尝试把 factor 实验作为 curriculum 中间台阶，再回到 full 500 digit-spaced field copy。这里选择 `signal_value` checkpoint 作为起点，因为它最接近 value 出错机制。
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_factor_signal_value_field_copy_spaced_250/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_spaced_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_full_field_copy_spaced_500_from_signal_value
+```
+
+训练曲线：
+
+```text
+step 0: train loss 1.6094, val loss 1.6983
+step 300: train loss 0.1219, val loss 0.1669
+step 600: train loss 0.0398, val loss 0.0412
+step 900: train loss 0.0190, val loss 0.0264
+```
+
+验证集结果：
+
+```text
+examples: 50
+exact match: 90.00%
+station accuracy: 94.00%
+signal accuracy: 100.00%
+value accuracy: 96.00%
+unit accuracy: 100.00%
+all fields accuracy: 90.00%
+```
+
+训练集结果：
+
+```text
+examples: 450
+station accuracy: 91.56%
+signal accuracy: 100.00%
+value accuracy: 99.11%
+unit accuracy: 100.00%
+all fields accuracy: 90.89%
+```
+
+和最早的 full 500 直接训练对比：
+
+```text
+full 500 direct:
+all fields accuracy: 0.00%
+
+full 500 after factor curriculum:
+all fields accuracy: 90.00%
+```
+
+观察：factor curriculum 明显解决了 full 500 的坍缩问题。剩余错误主要集中在 station 字符串，例如把 `YEBES40M` 生成成 `YEBES20`；signal、unit 已经稳定，value 也从最早的主要错误来源变成了少量错误。
+
+结论：这一步验证了前面的诊断。模型不是没有四字段复制能力，也不是单纯被数字压垮，而是需要通过 curriculum 逐步学习组合关系。把 `signal + value` 作为中间台阶之后，full 500 digit-spaced field copy 从 0% 提升到 90%。
+
 这一步把二阶段主线接起来：
 
 ```text
