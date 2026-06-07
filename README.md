@@ -2621,6 +2621,63 @@ all fields accuracy: 90.00%
 
 结论：这一步验证了前面的诊断。模型不是没有四字段复制能力，也不是单纯被数字压垮，而是需要通过 curriculum 逐步学习组合关系。把 `signal + value` 作为中间台阶之后，full 500 digit-spaced field copy 从 0% 提升到 90%。
 
+normal full 500 after digit-spaced curriculum：
+
+在 full 500 digit-spaced field copy 达到 90% 后，继续回到普通数字格式，验证 curriculum 学到的字段结构和组合关系能否迁移到真实 value 格式。
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_full_field_copy_spaced_500_from_signal_value/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_full_field_copy_normal_500_from_spaced
+```
+
+训练曲线：
+
+```text
+step 0: train loss 1.7106, val loss 1.6202
+step 300: train loss 0.1736, val loss 0.1680
+step 600: train loss 0.1106, val loss 0.1101
+step 900: train loss 0.0514, val loss 0.0537
+```
+
+验证集结果：
+
+```text
+examples: 50
+exact match: 76.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 76.00%
+unit accuracy: 100.00%
+all fields accuracy: 76.00%
+```
+
+训练集结果：
+
+```text
+examples: 450
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 77.78%
+unit accuracy: 100.00%
+all fields accuracy: 77.78%
+```
+
+观察：从 digit-spaced 回到普通数字格式后，station、signal、unit 全部稳定到 100%，说明字段结构和组合关系已经迁移成功。剩余错误几乎都集中在 value，例如把 `4.7` 生成成 `4.4`，或把 `12.0` 生成成 `25.0`。
+
+结论：curriculum 成功把 full field copy 从 digit-spaced 迁移回普通格式，但 GPT-2 BPE 下的普通数字复制仍然是主要瓶颈。和最早普通 full field copy 失败相比，这已经从 0% 提升到 76%，说明中间课程确实有效。
+
 这一步把二阶段主线接起来：
 
 ```text
