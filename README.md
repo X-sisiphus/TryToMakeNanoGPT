@@ -2678,6 +2678,114 @@ all fields accuracy: 77.78%
 
 结论：curriculum 成功把 full field copy 从 digit-spaced 迁移回普通格式，但 GPT-2 BPE 下的普通数字复制仍然是主要瓶颈。和最早普通 full field copy 失败相比，这已经从 0% 提升到 76%，说明中间课程确实有效。
 
+normal value repair：
+
+为了继续修复普通数字格式下的 value 错误，做两段训练：
+
+```text
+Stage 1: 在普通 value_copy_500 上做局部 value 修复
+Stage 2: 回到普通 field_copy_500，刷新完整四字段格式
+Stage 3: 使用更低学习率继续微调普通 field_copy_500
+```
+
+第一段 value 修复：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_full_field_copy_normal_500_from_spaced/ckpt.pt \
+  --sft-path data/sft/value_copy_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 500 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 8 \
+  --block-size 64 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_value_repair_normal_from_field_500
+```
+
+第二段回到四字段：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_value_repair_normal_from_field_500/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 500 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_full_field_copy_normal_500_after_value_repair
+```
+
+第二段结果：
+
+```text
+validation:
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 80.00%
+unit accuracy: 100.00%
+all fields accuracy: 80.00%
+
+train:
+value accuracy: 87.33%
+all fields accuracy: 87.33%
+```
+
+第三段低学习率继续微调：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_full_field_copy_normal_500_after_value_repair/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_copy_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-4 \
+  --out-dir out/sft_full_field_copy_normal_500_after_value_repair_long
+```
+
+第三段结果：
+
+```text
+validation:
+exact match: 88.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 88.00%
+unit accuracy: 100.00%
+all fields accuracy: 88.00%
+
+train:
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 95.78%
+unit accuracy: 100.00%
+all fields accuracy: 95.78%
+```
+
+对比：
+
+```text
+normal full field copy direct: 0.00%
+after digit-spaced curriculum: 76.00%
+after value repair: 80.00%
+after low-lr field refresh: 88.00%
+```
+
+观察：value repair 能继续提升普通数字格式下的 value 复制，且不会破坏 station、signal、unit。低学习率 field refresh 比单纯 value repair 更有效，说明 value-only 修复后需要回到完整格式中重新对齐输出分布。
+
+结论：普通数字复制仍然是最后瓶颈，但经过 curriculum 和 value repair，普通 full field copy 已经从 0% 提升到 88%。剩余错误仍然是同一 signal 下的数值混淆，例如 `25.0 -> 12.0`、`1.2 -> 5.2`。
+
 这一步把二阶段主线接起来：
 
 ```text
