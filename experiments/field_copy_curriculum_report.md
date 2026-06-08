@@ -465,6 +465,45 @@ all fields accuracy: 98.00%
 
 这说明，针对已定位瓶颈类型做 curriculum，比泛泛增加数据更有效。模型开始学会利用 `current`、`accepted estimate`、`station has` 等语义线索来选择目标 value，同时忽略 previous、rejected 和 network-average value。
 
+### 3.15 Multi-station Binding
+
+继续测试同一句多 station / 多测量值绑定。每条样本包含两个 station 和两组 measurement，并明确指定 requested / target station。
+
+zero-shot：
+
+```text
+multi-station:
+exact match: 18.20%
+station accuracy: 54.80%
+signal accuracy: 51.60%
+value accuracy: 38.20%
+unit accuracy: 66.60%
+all fields accuracy: 18.20%
+```
+
+这说明，即使模型已经具备 held-out template 和 hard distractor 能力，遇到两个 station 时仍然容易抽错 measurement 组。
+
+在 multi-station 数据上训练后：
+
+```text
+multi-station:
+exact match: 62.80%
+station accuracy: 91.80%
+signal accuracy: 72.00%
+value accuracy: 70.00%
+unit accuracy: 78.60%
+all fields accuracy: 62.80%
+
+distractor 回测:
+all fields accuracy: 81.20%
+value accuracy: 82.40%
+
+held-out template 回测:
+all fields accuracy: 100.00%
+```
+
+这一步暴露了新的 trade-off：multi-station 绑定能力可以被训练起来，但会削弱之前 hard distractor 获得的 value 干扰鲁棒性。新的瓶颈可以称为 entity-measurement binding，即如何把 station、signal、value、unit 作为一组绑定起来，而不是只识别局部字段。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -535,6 +574,8 @@ distractor zero-shot: 13.20%
 distractor after training: 88.40%
 distractor type hardest cases: previous / negative / network
 hard distractor curriculum: 93.80%
+multi-station zero-shot: 18.20%
+multi-station after training: 62.80%
 ```
 
 最终结论：
@@ -544,6 +585,7 @@ hard distractor curriculum: 93.80%
 通过 digit-spaced curriculum、factor curriculum 和 normal value repair，
 可以把普通四字段 copy 从 0% 提升到 88%，进一步迁移到自然模板抽取、rich 模板抽取和 held-out 模板抽取，并通过 distractor curriculum 提升抗干扰能力。
 针对 previous / negative / network 的 hard distractor curriculum 又能把整体 distractor 从 88.40% 提升到 93.80%。
+多 station 场景暴露了新的 entity-measurement binding 瓶颈，单独训练 multi-station 会提升绑定能力，但会削弱 distractor 鲁棒性。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
@@ -555,6 +597,7 @@ hard distractor curriculum: 93.80%
 - 把当前实验链整理成正式技术报告
 - 拆解 distractor 类型，例如 previous value、negative statement、network average、uncertainty
 - 针对 previous / negative / network 做更细的 contrastive curriculum
+- 混合 hard distractor 和 multi-station 数据，减少能力互相覆盖
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集

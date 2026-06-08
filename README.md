@@ -3244,6 +3244,80 @@ all fields accuracy: 98.00%
 
 结论：目标 value 选择能力可以通过针对性 curriculum 明显修复。剩余错误仍集中在极相似数值或同一 signal 的合法候选值之间，例如 `accepted estimate`、`final value` 和 rejected/previous value 的竞争。
 
+multi-station binding：
+
+继续测试同一句多 station / 多测量值绑定。每条样本包含两个 station 和两组 measurement，并明确指定 requested / target station：
+
+```text
+The report lists two stations: KOKEE with seasonal amplitude 3.6 mm; YEBES40M with zenith wet delay 38.5 mm. Extract YEBES40M.
+
+Extract the measurement for TSKB. In the same solution, GOLD has tropospheric delay of 12.0 ps, and TSKB has tropospheric delay of 18.5 ps.
+
+ONSA: vertical velocity, 2.4 mm/yr. GOLD: vertical velocity, 5.6 mm/yr. The requested record is ONSA.
+```
+
+数据构造：
+
+```bash
+python scripts/build_multi_station_field_sft.py \
+  --out data/sft/field_multi_station_500.jsonl \
+  --num-examples 500
+```
+
+用 hard distractor 模型直接评测：
+
+```text
+zero-shot multi-station:
+exact match: 18.20%
+station accuracy: 54.80%
+signal accuracy: 51.60%
+value accuracy: 38.20%
+unit accuracy: 66.60%
+all fields accuracy: 18.20%
+```
+
+观察：这是另一个鲁棒性断崖。模型经常抽到另一个 station 的 measurement，说明它还没有稳定掌握 station 和 measurement 的绑定关系。
+
+在 multi-station 数据上训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_distractor_hard_types_900/ckpt.pt \
+  --sft-path data/sft/field_multi_station_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_multi_station_500_from_hard
+```
+
+训练后结果：
+
+```text
+multi-station:
+exact match: 62.80%
+station accuracy: 91.80%
+signal accuracy: 72.00%
+value accuracy: 70.00%
+unit accuracy: 78.60%
+all fields accuracy: 62.80%
+
+distractor回测:
+all fields accuracy: 81.20%
+value accuracy: 82.40%
+
+held-out template回测:
+all fields accuracy: 100.00%
+```
+
+观察：multi-station 从 18.20% 提升到 62.80%，但还没有解决；同时 distractor 从 93.80% 下降到 81.20%，说明 multi-station 绑定训练和 value 干扰鲁棒性之间存在能力冲突。held-out template 保持 100%，说明简单模板抽取没有被破坏。
+
+结论：新的瓶颈是 entity-measurement binding，也就是同一句多个 station 时，如何把 station、signal、value、unit 作为一组绑定起来。下一步应该做混合训练，把 hard distractor 和 multi-station 样本混在一起，避免修一个能力时忘掉另一个能力。
+
 这一步把二阶段主线接起来：
 
 ```text
