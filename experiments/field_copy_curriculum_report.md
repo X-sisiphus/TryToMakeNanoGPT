@@ -391,6 +391,42 @@ all fields accuracy: 97.50%
 
 这一步说明 distractor curriculum 可以显著提升抗干扰能力，但会对原本简单模板分布带来轻微 trade-off。剩余错误依然集中在 value，特别是从多个候选数字中选错目标数字。
 
+### 3.13 干扰类型拆解
+
+进一步把 distractor 拆成五类：
+
+```text
+previous: 当前值 + previous / last week value
+negative: not / reject value + accepted value
+network: station value + network average
+uncertainty: target value + formal uncertainty
+metadata: target value + window / samples / epoch 等元数据数字
+```
+
+held-out 模型 zero-shot：
+
+```text
+previous: all 16.50%, value 30.50%
+negative: all 37.00%, value 49.00%
+network: all 28.00%, value 42.00%
+uncertainty: all 39.50%, value 51.50%
+metadata: all 85.50%, value 97.00%
+```
+
+distractor training 后：
+
+```text
+previous: all 53.00%, value 53.00%
+negative: all 52.00%, value 52.00%
+network: all 63.50%, value 63.50%
+uncertainty: all 90.50%, value 90.50%
+metadata: all 99.00%, value 99.00%
+```
+
+这个结果说明，模型并不是简单地怕“句子里有多个数字”。metadata 数字对它影响很小，因为这些数字的语义角色明显不是目标测量值。真正困难的是 previous、negative 和 network：它们都包含同单位、同 signal 空间里的合法候选 value。
+
+因此，剩余瓶颈可以更精确地表述为目标选择能力：模型需要依据语义线索选择 accepted/current/station-specific value，并忽略 previous、rejected、network-average value。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -459,6 +495,7 @@ rich natural field extraction: 100.00% validation
 held-out template extraction: 100.00%
 distractor zero-shot: 13.20%
 distractor after training: 88.40%
+distractor type hardest cases: previous / negative / network
 ```
 
 最终结论：
@@ -477,6 +514,7 @@ distractor after training: 88.40%
 
 - 把当前实验链整理成正式技术报告
 - 拆解 distractor 类型，例如 previous value、negative statement、network average、uncertainty
+- 针对 previous / negative / network 做更细的 contrastive curriculum
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集

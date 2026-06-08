@@ -3068,6 +3068,94 @@ all fields accuracy: 97.50%
 
 结论：模板泛化不等于抗干扰泛化。模型已经能处理未见模板，但当句子中出现多个数字时，还需要专门的 distractor curriculum。下一步可以继续做更细的干扰类型拆解：previous value、negative statement、network average、uncertainty，分别看哪类干扰最难。
 
+distractor type breakdown：
+
+为了判断哪类数字干扰最难，继续构造五类单独的 distractor 评测集：
+
+```text
+previous: 当前值 + previous / last week value
+negative: not / reject value + accepted value
+network: station value + network average
+uncertainty: target value + formal uncertainty
+metadata: target value + window / samples / epoch 等元数据数字
+```
+
+数据构造：
+
+```bash
+for t in previous negative network uncertainty metadata; do
+  python scripts/build_distractor_type_field_sft.py \
+    --distractor-type $t \
+    --out data/sft/field_distractor_${t}_200.jsonl \
+    --num-examples 200
+done
+```
+
+held-out 模型 zero-shot：
+
+```text
+previous:
+all fields accuracy: 16.50%
+value accuracy: 30.50%
+
+negative:
+all fields accuracy: 37.00%
+value accuracy: 49.00%
+
+network:
+all fields accuracy: 28.00%
+value accuracy: 42.00%
+
+uncertainty:
+all fields accuracy: 39.50%
+value accuracy: 51.50%
+
+metadata:
+all fields accuracy: 85.50%
+value accuracy: 97.00%
+```
+
+distractor training 后：
+
+```text
+previous:
+all fields accuracy: 53.00%
+value accuracy: 53.00%
+
+negative:
+all fields accuracy: 52.00%
+value accuracy: 52.00%
+
+network:
+all fields accuracy: 63.50%
+value accuracy: 63.50%
+
+uncertainty:
+all fields accuracy: 90.50%
+value accuracy: 90.50%
+
+metadata:
+all fields accuracy: 99.00%
+value accuracy: 99.00%
+```
+
+观察：metadata 数字最容易，因为它们的语义和单位通常不像目标字段；uncertainty 中等偏容易。真正困难的是 previous、negative、network，这三类都包含同单位、同 signal 空间内的合法候选值。模型已经能稳定抽取 station、signal、unit，但经常在多个候选 value 之间选错。
+
+典型错误：
+
+```text
+Input:
+The zenith wet delay at YEBES40M is not 71.4 mm; the accepted estimate is 38.5 mm.
+
+Target value:
+38.5
+
+Prediction:
+71.4
+```
+
+结论：剩余瓶颈已经不是字段抽取格式，而是目标选择能力。模型需要学会使用语义线索，例如 `accepted estimate`、`current`、`station has`，同时忽略 `not`、`previous`、`network average` 等非目标数值。
+
 这一步把二阶段主线接起来：
 
 ```text
