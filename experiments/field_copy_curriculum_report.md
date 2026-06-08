@@ -504,6 +504,49 @@ all fields accuracy: 100.00%
 
 这一步暴露了新的 trade-off：multi-station 绑定能力可以被训练起来，但会削弱之前 hard distractor 获得的 value 干扰鲁棒性。新的瓶颈可以称为 entity-measurement binding，即如何把 station、signal、value、unit 作为一组绑定起来，而不是只识别局部字段。
 
+### 3.16 Mixed Hard Distractor + Multi-station
+
+为了同时保住 hard distractor 和 multi-station 能力，构造混合训练集：
+
+```text
+hard distractor: 900
+multi-station: 500
+total: 1400
+```
+
+从 hard distractor checkpoint 初始化后训练，结果如下：
+
+```text
+multi-station zero-shot:
+all fields accuracy: 18.20%
+
+multi-station after multi-only:
+all fields accuracy: 62.80%
+
+multi-station after mixed:
+all fields accuracy: 48.40%
+```
+
+```text
+distractor after hard:
+all fields accuracy: 93.80%
+
+distractor after multi-only:
+all fields accuracy: 81.20%
+
+distractor after mixed:
+all fields accuracy: 93.60%
+```
+
+```text
+held-out after mixed:
+all fields accuracy: 99.00%
+```
+
+这个结果是一个有价值的负结果。简单拼接数据保住了 hard distractor 能力，但没有充分学会 multi-station binding。原因可能是 hard distractor 样本更多，且初始化 checkpoint 已经偏向 hard distractor 解法；multi-station 绑定需要更高比例或更专门的阶段式训练。
+
+这一步提醒：多能力训练不是把数据拼起来就自动解决，采样比例、训练顺序和学习率都会影响最终能力分布。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -576,6 +619,7 @@ distractor type hardest cases: previous / negative / network
 hard distractor curriculum: 93.80%
 multi-station zero-shot: 18.20%
 multi-station after training: 62.80%
+mixed hard + multi: multi-station 48.40%, distractor 93.60%
 ```
 
 最终结论：
@@ -586,6 +630,7 @@ multi-station after training: 62.80%
 可以把普通四字段 copy 从 0% 提升到 88%，进一步迁移到自然模板抽取、rich 模板抽取和 held-out 模板抽取，并通过 distractor curriculum 提升抗干扰能力。
 针对 previous / negative / network 的 hard distractor curriculum 又能把整体 distractor 从 88.40% 提升到 93.80%。
 多 station 场景暴露了新的 entity-measurement binding 瓶颈，单独训练 multi-station 会提升绑定能力，但会削弱 distractor 鲁棒性。
+简单混合训练保住了 distractor，却没有充分提升 multi-station，说明多能力训练需要控制数据比例和训练顺序。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。

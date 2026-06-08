@@ -3318,6 +3318,70 @@ all fields accuracy: 100.00%
 
 结论：新的瓶颈是 entity-measurement binding，也就是同一句多个 station 时，如何把 station、signal、value、unit 作为一组绑定起来。下一步应该做混合训练，把 hard distractor 和 multi-station 样本混在一起，避免修一个能力时忘掉另一个能力。
 
+mixed hard distractor + multi-station：
+
+为了同时保住 hard distractor 的 value 选择能力和 multi-station 的 entity-measurement binding，构造混合训练集：
+
+```text
+hard distractor: 900
+multi-station: 500
+total: 1400
+```
+
+训练：
+
+```bash
+cat data/sft/field_distractor_hard_types_900.jsonl \
+    data/sft/field_multi_station_500.jsonl \
+    > data/sft/field_mixed_hard_multi_1400.jsonl
+
+python train_sft.py \
+  --init-from out/sft_distractor_hard_types_900/ckpt.pt \
+  --sft-path data/sft/field_mixed_hard_multi_1400.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1200 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 2e-4 \
+  --out-dir out/sft_mixed_hard_multi_1400
+```
+
+结果对比：
+
+```text
+multi-station zero-shot:
+all fields accuracy: 18.20%
+
+multi-station after multi-only:
+all fields accuracy: 62.80%
+
+multi-station after mixed:
+all fields accuracy: 48.40%
+```
+
+```text
+distractor after hard:
+all fields accuracy: 93.80%
+
+distractor after multi-only:
+all fields accuracy: 81.20%
+
+distractor after mixed:
+all fields accuracy: 93.60%
+```
+
+```text
+held-out after mixed:
+all fields accuracy: 99.00%
+```
+
+观察：混合训练保住了 hard distractor 能力，但 multi-station 只有 48.40%，低于 multi-only 的 62.80%。这说明简单拼接数据不是自动解决能力冲突的办法。由于 hard distractor 样本更多，而且初始化来自 hard distractor checkpoint，训练可能仍然偏向 value 选择，而没有充分学习 station-measurement binding。
+
+结论：混合训练揭示了新的工程问题：数据比例和采样策略很重要。下一步可以提高 multi-station 占比，或做阶段式训练，例如 `multi-station -> mixed low-lr refresh`，而不是一次性拼接。
+
 这一步把二阶段主线接起来：
 
 ```text
