@@ -427,6 +427,44 @@ metadata: all 99.00%, value 99.00%
 
 因此，剩余瓶颈可以更精确地表述为目标选择能力：模型需要依据语义线索选择 accepted/current/station-specific value，并忽略 previous、rejected、network-average value。
 
+### 3.14 Hard Distractor Curriculum
+
+基于类型拆解结果，继续只针对最难的 previous、negative、network 三类做训练。每类构造 300 条样本，合并为 900 条 hard distractor 训练集。
+
+hard-types 训练前后对比：
+
+```text
+previous: 53.00% -> 99.00%
+negative: 52.00% -> 96.00%
+network: 63.50% -> 99.00%
+uncertainty: 90.50% -> 95.00%
+metadata: 99.00% -> 99.00%
+```
+
+整体 distractor 回测：
+
+```text
+after general distractor training:
+all fields accuracy: 88.40%
+value accuracy: 88.40%
+
+after hard distractor curriculum:
+all fields accuracy: 93.80%
+value accuracy: 93.80%
+```
+
+held-out template 回测：
+
+```text
+after general distractor training:
+all fields accuracy: 97.50%
+
+after hard distractor curriculum:
+all fields accuracy: 98.00%
+```
+
+这说明，针对已定位瓶颈类型做 curriculum，比泛泛增加数据更有效。模型开始学会利用 `current`、`accepted estimate`、`station has` 等语义线索来选择目标 value，同时忽略 previous、rejected 和 network-average value。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -496,6 +534,7 @@ held-out template extraction: 100.00%
 distractor zero-shot: 13.20%
 distractor after training: 88.40%
 distractor type hardest cases: previous / negative / network
+hard distractor curriculum: 93.80%
 ```
 
 最终结论：
@@ -504,6 +543,7 @@ distractor type hardest cases: previous / negative / network
 对于小模型结构化字段抽取，直接训练失败主要来自组合泛化和数字 tokenization。
 通过 digit-spaced curriculum、factor curriculum 和 normal value repair，
 可以把普通四字段 copy 从 0% 提升到 88%，进一步迁移到自然模板抽取、rich 模板抽取和 held-out 模板抽取，并通过 distractor curriculum 提升抗干扰能力。
+针对 previous / negative / network 的 hard distractor curriculum 又能把整体 distractor 从 88.40% 提升到 93.80%。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。

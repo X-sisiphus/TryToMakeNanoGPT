@@ -3156,6 +3156,94 @@ Prediction:
 
 结论：剩余瓶颈已经不是字段抽取格式，而是目标选择能力。模型需要学会使用语义线索，例如 `accepted estimate`、`current`、`station has`，同时忽略 `not`、`previous`、`network average` 等非目标数值。
 
+hard distractor curriculum：
+
+基于类型拆解结果，继续只针对最难的三类干扰做 curriculum：
+
+```text
+previous
+negative
+network
+```
+
+构造每类 300 条样本，合并成 900 条 hard distractor 训练集：
+
+```bash
+for t in previous negative network; do
+  python scripts/build_distractor_type_field_sft.py \
+    --distractor-type $t \
+    --out data/sft/field_distractor_hard_${t}_300.jsonl \
+    --num-examples 300
+done
+
+cat data/sft/field_distractor_hard_previous_300.jsonl \
+    data/sft/field_distractor_hard_negative_300.jsonl \
+    data/sft/field_distractor_hard_network_300.jsonl \
+    > data/sft/field_distractor_hard_types_900.jsonl
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_distractor_500_from_heldout/ckpt.pt \
+  --sft-path data/sft/field_distractor_hard_types_900.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_distractor_hard_types_900
+```
+
+hard-types 训练前后对比：
+
+```text
+previous:
+53.00% -> 99.00%
+
+negative:
+52.00% -> 96.00%
+
+network:
+63.50% -> 99.00%
+
+uncertainty:
+90.50% -> 95.00%
+
+metadata:
+99.00% -> 99.00%
+```
+
+整体 distractor 回测：
+
+```text
+after general distractor training:
+all fields accuracy: 88.40%
+value accuracy: 88.40%
+
+after hard distractor curriculum:
+all fields accuracy: 93.80%
+value accuracy: 93.80%
+```
+
+held-out template 回测：
+
+```text
+after general distractor training:
+all fields accuracy: 97.50%
+
+after hard distractor curriculum:
+all fields accuracy: 98.00%
+```
+
+观察：针对瓶颈类型训练，比泛泛增加 distractor 数据更有效。previous、negative、network 三类从 52-63% 提升到 96-99%，整体 distractor 从 88.40% 提升到 93.80%，且没有破坏 held-out template 能力。
+
+结论：目标 value 选择能力可以通过针对性 curriculum 明显修复。剩余错误仍集中在极相似数值或同一 signal 的合法候选值之间，例如 `accepted estimate`、`final value` 和 rejected/previous value 的竞争。
+
 这一步把二阶段主线接起来：
 
 ```text
