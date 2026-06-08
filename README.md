@@ -2786,6 +2786,69 @@ after low-lr field refresh: 88.00%
 
 结论：普通数字复制仍然是最后瓶颈，但经过 curriculum 和 value repair，普通 full field copy 已经从 0% 提升到 88%。剩余错误仍然是同一 signal 下的数值混淆，例如 `25.0 -> 12.0`、`1.2 -> 5.2`。
 
+natural field extraction from copy：
+
+完成普通四字段 copy 后，继续迁移到更自然的句子抽取任务。这里不再使用 `station=...; value=...` 这种显式模板，而是使用自然语言句子：
+
+```text
+YEBES40M has a reported zenith wet delay of 38.5 mm in the latest solution.
+For TSKB, the estimated tropospheric delay equals 18.5 ps.
+Station WETTZELL shows a clock bias of 1.2 ns from space geodetic observations.
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_full_field_copy_normal_500_after_value_repair_long/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_natural_field_500_from_copy
+```
+
+训练曲线：
+
+```text
+step 0: train loss 0.3480, val loss 0.4986
+step 300: train loss 0.0166, val loss 0.0118
+step 600: train loss 0.0052, val loss 0.0085
+step 900: train loss 0.0051, val loss 0.0089
+```
+
+验证集结果：
+
+```text
+examples: 50
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+训练集结果：
+
+```text
+examples: 450
+station accuracy: 99.56%
+signal accuracy: 99.11%
+value accuracy: 98.00%
+unit accuracy: 100.00%
+all fields accuracy: 96.67%
+```
+
+观察：copy curriculum 成功迁移到自然模板抽取。验证集达到 100%，训练集仍有少量 value 和 signal 错误，说明验证集在这个 split 下可能更容易，不能把 100% 过度解释为真实泛化已经完全解决。
+
+结论：从 copy 到自然句子抽取的迁移是有效的。前面学习到的字段格式、组合关系和普通数字复制能力，为自然 field extraction 提供了很好的初始化。
+
 这一步把二阶段主线接起来：
 
 ```text

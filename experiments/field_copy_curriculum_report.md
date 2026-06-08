@@ -240,6 +240,36 @@ unit accuracy: 100.00%
 
 最终普通四字段 copy 从 0% 提升到 88%。
 
+### 3.9 迁移到自然句子抽取
+
+在普通四字段 copy 稳定后，继续迁移到自然语言模板：
+
+```text
+YEBES40M has a reported zenith wet delay of 38.5 mm in the latest solution.
+For TSKB, the estimated tropospheric delay equals 18.5 ps.
+Station WETTZELL shows a clock bias of 1.2 ns from space geodetic observations.
+```
+
+从 `normal field copy` checkpoint 初始化后：
+
+```text
+validation:
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+
+train:
+station accuracy: 99.56%
+signal accuracy: 99.11%
+value accuracy: 98.00%
+unit accuracy: 100.00%
+all fields accuracy: 96.67%
+```
+
+这一步说明前面的 copy curriculum 不只是让模型记住固定格式，也能作为自然 field extraction 的初始化。需要注意的是，验证集 100% 不代表真实泛化彻底解决，因为当前自然模板仍然来自有限模板集合，且这个 split 下验证样本可能更容易。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -303,6 +333,7 @@ station / signal / value / unit 同时变化
 digit-spaced factor curriculum: 90.00%
 normal full field copy after curriculum: 76.00%
 normal full field copy after value repair: 88.00%
+natural field extraction after copy curriculum: 100.00% validation
 ```
 
 最终结论：
@@ -310,7 +341,7 @@ normal full field copy after value repair: 88.00%
 ```text
 对于小模型结构化字段抽取，直接训练失败主要来自组合泛化和数字 tokenization。
 通过 digit-spaced curriculum、factor curriculum 和 normal value repair，
-可以把普通四字段 copy 从 0% 提升到 88%。
+可以把普通四字段 copy 从 0% 提升到 88%，并进一步迁移到自然模板抽取。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
@@ -320,7 +351,7 @@ normal full field copy after value repair: 88.00%
 这个阶段建议收束，不再继续死磕最后 12%。更值得继续的是：
 
 - 把当前实验链整理成正式技术报告
-- 进入自然语言 field extraction，而不只停留在 copy 模板
+- 增加更多自然语言模板，验证是否仍能保持高准确率
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集
