@@ -2921,6 +2921,74 @@ all fields accuracy: 100.00%
 
 结论：copy curriculum -> natural extraction -> rich natural extraction 的迁移链路跑通。下一步如果继续提升研究价值，应该做 held-out 模板评测，也就是训练时不用某些模板，评测时专门看未见过模板。
 
+held-out template natural extraction：
+
+为了验证模型是否真的学到抽取规则，而不是只记住模板，构造 held-out template 实验：
+
+```text
+total rich templates: 20
+train templates: 0-15
+held-out templates: 16-19
+```
+
+训练集只包含前 16 个模板，评测集只包含后 4 个未见过模板。
+
+数据构造：
+
+```bash
+python scripts/build_heldout_template_field_sft.py \
+  --train-out data/sft/field_rich_train_templates_1000.jsonl \
+  --heldout-out data/sft/field_rich_heldout_templates_200.jsonl \
+  --train-examples 1000 \
+  --heldout-examples 200 \
+  --heldout-templates 4
+```
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_natural_field_500_from_copy/ckpt.pt \
+  --sft-path data/sft/field_rich_train_templates_1000.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_heldout_template_train_1000
+```
+
+训练模板验证集：
+
+```text
+examples: 100
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+held-out 模板评测：
+
+```text
+examples: 200
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+观察：模型在未见过的 4 个模板上仍达到 100%，说明它不是单纯记住训练模板，而是已经学到了这个合成分布内的字段抽取规则。
+
+结论：在当前合成模板体系内，结构化抽取阶段已经彻底跑通。下一步如果继续挑战泛化，应转向更开放的扰动，例如加入无关背景句、多个数值干扰、字段缺失、同一句多 station，或真实论文/报告句子。
+
 这一步把二阶段主线接起来：
 
 ```text
