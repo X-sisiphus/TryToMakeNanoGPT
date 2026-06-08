@@ -2989,6 +2989,85 @@ all fields accuracy: 100.00%
 
 结论：在当前合成模板体系内，结构化抽取阶段已经彻底跑通。下一步如果继续挑战泛化，应转向更开放的扰动，例如加入无关背景句、多个数值干扰、字段缺失、同一句多 station，或真实论文/报告句子。
 
+distractor robustness：
+
+为了测试模型在多个数字干扰下的鲁棒性，构造 distractor 数据。每条样本只有一个目标 value，但 input 中会出现多个无关数字，例如 epoch、previous solution、network average、uncertainty、iteration count：
+
+```text
+At YEBES40M, zenith wet delay equals 38.5 mm. The previous solution listed 52.2 mm, and the quality flag is 1.
+
+The tropospheric delay at HOBART12 is not 12.0 ps; the accepted estimate is 8.0 ps after 3 iterations.
+
+Report 101: YEBES40M has vertical velocity = -8.5 mm/yr; the network average for this product is 5.6 mm/yr.
+```
+
+数据构造：
+
+```bash
+python scripts/build_distractor_field_sft.py \
+  --out data/sft/field_distractor_500.jsonl \
+  --num-examples 500
+```
+
+先用 held-out template 模型直接评测 distractor 数据：
+
+```text
+zero-shot distractor:
+exact match: 13.20%
+station accuracy: 23.20%
+signal accuracy: 72.80%
+value accuracy: 42.20%
+unit accuracy: 94.20%
+all fields accuracy: 13.20%
+```
+
+观察：这是一次真正的鲁棒性断崖。模型在 held-out 模板上 100%，但遇到多个干扰数字后，输出格式和字段选择都会明显坏掉。
+
+然后在 distractor 数据上训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_heldout_template_train_1000/ckpt.pt \
+  --sft-path data/sft/field_distractor_500.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_distractor_500_from_heldout
+```
+
+训练后 distractor 结果：
+
+```text
+distractor all:
+exact match: 88.40%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 88.40%
+unit accuracy: 100.00%
+all fields accuracy: 88.40%
+```
+
+训练后 held-out template 回测：
+
+```text
+held-out template after distractor training:
+exact match: 97.50%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 97.50%
+unit accuracy: 100.00%
+all fields accuracy: 97.50%
+```
+
+观察：distractor training 把干扰集从 13.20% 提升到 88.40%，但 held-out template 从 100% 轻微下降到 97.50%。剩余错误几乎都集中在 value，尤其是从多个候选数字中选错目标数字，例如把 previous solution 或 rejected value 当成目标 value。
+
+结论：模板泛化不等于抗干扰泛化。模型已经能处理未见模板，但当句子中出现多个数字时，还需要专门的 distractor curriculum。下一步可以继续做更细的干扰类型拆解：previous value、negative statement、network average、uncertainty，分别看哪类干扰最难。
+
 这一步把二阶段主线接起来：
 
 ```text

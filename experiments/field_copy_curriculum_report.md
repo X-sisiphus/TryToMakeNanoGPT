@@ -339,6 +339,58 @@ all fields accuracy: 100.00%
 
 这个结果比普通 rich train/val 更有说服力：在当前合成模板体系内，模型确实学到了字段抽取规则，而不是只记住训练模板。
 
+### 3.12 多数字干扰鲁棒性
+
+Held-out template 说明模型能处理未见句式，但它仍然可能不具备真实文本中的抗干扰能力。为此构造 distractor 数据：每条样本只有一个目标 value，但 input 中包含多个无关数字，例如 previous solution、network average、epoch、uncertainty、iteration count。
+
+例子：
+
+```text
+At YEBES40M, zenith wet delay equals 38.5 mm. The previous solution listed 52.2 mm, and the quality flag is 1.
+
+The tropospheric delay at HOBART12 is not 12.0 ps; the accepted estimate is 8.0 ps after 3 iterations.
+```
+
+先用 held-out template 模型直接评测：
+
+```text
+zero-shot distractor:
+exact match: 13.20%
+station accuracy: 23.20%
+signal accuracy: 72.80%
+value accuracy: 42.20%
+unit accuracy: 94.20%
+all fields accuracy: 13.20%
+```
+
+这说明模板泛化不等于抗干扰泛化。模型能处理未见模板，但遇到多个数字时，会抓错字段、抓错 value，甚至破坏输出格式。
+
+经过 distractor training 后：
+
+```text
+distractor all:
+exact match: 88.40%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 88.40%
+unit accuracy: 100.00%
+all fields accuracy: 88.40%
+```
+
+回测 held-out template：
+
+```text
+held-out template after distractor training:
+exact match: 97.50%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 97.50%
+unit accuracy: 100.00%
+all fields accuracy: 97.50%
+```
+
+这一步说明 distractor curriculum 可以显著提升抗干扰能力，但会对原本简单模板分布带来轻微 trade-off。剩余错误依然集中在 value，特别是从多个候选数字中选错目标数字。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -405,6 +457,8 @@ normal full field copy after value repair: 88.00%
 natural field extraction after copy curriculum: 100.00% validation
 rich natural field extraction: 100.00% validation
 held-out template extraction: 100.00%
+distractor zero-shot: 13.20%
+distractor after training: 88.40%
 ```
 
 最终结论：
@@ -412,7 +466,7 @@ held-out template extraction: 100.00%
 ```text
 对于小模型结构化字段抽取，直接训练失败主要来自组合泛化和数字 tokenization。
 通过 digit-spaced curriculum、factor curriculum 和 normal value repair，
-可以把普通四字段 copy 从 0% 提升到 88%，并进一步迁移到自然模板抽取、rich 模板抽取和 held-out 模板抽取。
+可以把普通四字段 copy 从 0% 提升到 88%，进一步迁移到自然模板抽取、rich 模板抽取和 held-out 模板抽取，并通过 distractor curriculum 提升抗干扰能力。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
@@ -422,7 +476,7 @@ held-out template extraction: 100.00%
 这个阶段建议收束，不再继续死磕最后 12%。更值得继续的是：
 
 - 把当前实验链整理成正式技术报告
-- 加入更开放的扰动，例如无关背景句、多个数值干扰、字段缺失、同一句多 station
+- 拆解 distractor 类型，例如 previous value、negative statement、network average、uncertainty
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集
