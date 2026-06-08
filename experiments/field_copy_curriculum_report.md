@@ -270,6 +270,37 @@ all fields accuracy: 96.67%
 
 这一步说明前面的 copy curriculum 不只是让模型记住固定格式，也能作为自然 field extraction 的初始化。需要注意的是，验证集 100% 不代表真实泛化彻底解决，因为当前自然模板仍然来自有限模板集合，且这个 split 下验证样本可能更容易。
 
+### 3.10 Rich 自然模板扩展
+
+为了测试模型是否只适应原来的 5 个自然模板，进一步构造 20 个自然语言模板、1000 条样本，例如：
+
+```text
+The zenith wet delay entry for station YEBES40M reads 38.5 mm.
+At YEBES40M, the processing chain found tropospheric delay to be 12.0 ps.
+TSKB -- tropospheric delay: 18.5 ps.
+In the geodetic report, GOLD is associated with 52.2 mm of zenith wet delay.
+```
+
+从自然字段抽取 checkpoint 继续训练后：
+
+```text
+validation:
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+
+train:
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+这说明在模板生成分布内，模型已经稳定掌握自然字段抽取。但这仍不等于真实开放文本泛化，因为训练和验证来自同一模板集合。下一步更严格的评测应该使用 held-out templates。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -334,6 +365,7 @@ digit-spaced factor curriculum: 90.00%
 normal full field copy after curriculum: 76.00%
 normal full field copy after value repair: 88.00%
 natural field extraction after copy curriculum: 100.00% validation
+rich natural field extraction: 100.00% validation
 ```
 
 最终结论：
@@ -341,7 +373,7 @@ natural field extraction after copy curriculum: 100.00% validation
 ```text
 对于小模型结构化字段抽取，直接训练失败主要来自组合泛化和数字 tokenization。
 通过 digit-spaced curriculum、factor curriculum 和 normal value repair，
-可以把普通四字段 copy 从 0% 提升到 88%，并进一步迁移到自然模板抽取。
+可以把普通四字段 copy 从 0% 提升到 88%，并进一步迁移到自然模板抽取和 rich 模板抽取。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
@@ -351,7 +383,7 @@ natural field extraction after copy curriculum: 100.00% validation
 这个阶段建议收束，不再继续死磕最后 12%。更值得继续的是：
 
 - 把当前实验链整理成正式技术报告
-- 增加更多自然语言模板，验证是否仍能保持高准确率
+- 做 held-out template 评测，验证未见过模板上的抽取能力
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集

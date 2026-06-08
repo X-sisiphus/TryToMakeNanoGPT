@@ -2849,6 +2849,78 @@ all fields accuracy: 96.67%
 
 结论：从 copy 到自然句子抽取的迁移是有效的。前面学习到的字段格式、组合关系和普通数字复制能力，为自然 field extraction 提供了很好的初始化。
 
+rich natural field extraction：
+
+为了测试模型是否只适应原来的 5 个自然模板，构造 20 个自然语言模板、1000 条样本：
+
+```text
+The zenith wet delay entry for station YEBES40M reads 38.5 mm.
+At YEBES40M, the processing chain found tropospheric delay to be 12.0 ps.
+TSKB -- tropospheric delay: 18.5 ps.
+In the geodetic report, GOLD is associated with 52.2 mm of zenith wet delay.
+```
+
+数据构造：
+
+```bash
+python scripts/build_rich_field_sft.py \
+  --out data/sft/astro_sft_field_rich_1000.jsonl \
+  --num-examples 1000
+```
+
+训练从自然字段抽取 checkpoint 继续：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_natural_field_500_from_copy/ckpt.pt \
+  --sft-path data/sft/astro_sft_field_rich_1000.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 1000 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 3e-4 \
+  --out-dir out/sft_rich_field_1000_from_natural
+```
+
+训练曲线：
+
+```text
+step 0: train loss 0.0035, val loss 0.0055
+step 300: train loss 0.0041, val loss 0.0067
+step 600: train loss 0.0040, val loss 0.0031
+step 900: train loss 0.0010, val loss 0.0007
+```
+
+验证集结果：
+
+```text
+examples: 100
+exact match: 100.00%
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+训练集结果：
+
+```text
+examples: 900
+station accuracy: 100.00%
+signal accuracy: 100.00%
+value accuracy: 100.00%
+unit accuracy: 100.00%
+all fields accuracy: 100.00%
+```
+
+观察：在 20 个模板的合成自然语言分布内，模型已经完全掌握字段抽取。这个结果比 5 模板自然抽取更有说服力，但仍然属于模板生成分布内的泛化，不等同于真实开放文本泛化。
+
+结论：copy curriculum -> natural extraction -> rich natural extraction 的迁移链路跑通。下一步如果继续提升研究价值，应该做 held-out 模板评测，也就是训练时不用某些模板，评测时专门看未见过模板。
+
 这一步把二阶段主线接起来：
 
 ```text
