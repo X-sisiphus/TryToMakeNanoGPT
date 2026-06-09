@@ -3620,6 +3620,60 @@ wrong_station_or_record: 5.00%
 
 结论：hard binding-only 是一个负结果，说明“更难的数据”不能直接灌给小模型。mixed binding 是温和正结果：hard binding 自身从 40.12% 到 52.62%，multi-station 从 70.00% 到 71.40%，distractor 从 93.80% 到 95.40%。这次提升不大，但说明正确方向是“硬样本混合巩固”，而不是单独硬训。
 
+field extraction scorecard：
+
+新增 scorecard 脚本，用来从多个字段评测报告中自动抽取指标：
+
+```bash
+python tools/eval/summarize_field_scorecard.py \
+  --out-csv out/field_scorecard.csv \
+  --out-md out/field_scorecard.md \
+  multi_zero=out/field_accuracy_multi_station_500_zero_shot/report.md \
+  multi_only=out/field_accuracy_multi_station_500_after_train/report.md \
+  simple_mixed=out/field_accuracy_multi_station_500_after_mixed/report.md \
+  staged_refresh=out/field_accuracy_multi_station_500_after_refresh/report.md \
+  hard_only=out/field_accuracy_multi_station_500_after_hard_binding/report.md \
+  mixed_binding=out/field_accuracy_multi_station_500_after_mixed_binding/report.md \
+  hard_binding_zero=out/field_accuracy_hard_binding_800_zero_shot/report.md \
+  hard_binding_only=out/field_accuracy_hard_binding_800_after_train/report.md \
+  hard_binding_mixed=out/field_accuracy_hard_binding_800_after_mixed_binding/report.md \
+  distractor_refresh=out/field_accuracy_distractor_500_after_refresh/report.md \
+  distractor_hard_only=out/field_accuracy_distractor_500_after_hard_binding/report.md \
+  distractor_mixed_binding=out/field_accuracy_distractor_500_after_mixed_binding/report.md \
+  heldout_refresh=out/field_accuracy_heldout_template_after_refresh/report.md \
+  heldout_hard_only=out/field_accuracy_heldout_template_after_hard_binding/report.md \
+  heldout_mixed_binding=out/field_accuracy_heldout_template_after_mixed_binding/report.md
+```
+
+关键总表：
+
+```text
+checkpoint              multi-station   hard-binding   distractor   held-out
+multi_zero              18.20%          -              -            -
+multi_only              62.80%          -              81.20%       100.00%
+simple_mixed            48.40%          -              93.60%       99.00%
+staged_refresh          70.00%          -              93.80%       99.00%
+hard_binding_only       59.00%          60.50%         89.00%       98.00%
+mixed_binding           71.40%          52.62%         95.40%       99.00%
+```
+
+当前综合最好的 checkpoint：
+
+```text
+out/sft_mixed_binding_multi_hard_2200/ckpt.pt
+```
+
+选择它不是因为它在 hard binding 单项最高，而是因为它的整体 trade-off 最好：
+
+```text
+multi-station: 71.40%
+distractor: 95.40%
+held-out: 99.00%
+hard binding: 52.62%
+```
+
+阶段收束结论：这个 mini research 已经完成了从失败定位、课程构造、错误分析到综合模型选择的闭环。接下来继续提升 multi-station 当然可以，但更有学习价值的是进入 DPO / preference optimization，用已经建立好的字段抽取评测体系来观察偏好优化是否真的改善模型行为。
+
 这一步把二阶段主线接起来：
 
 ```text

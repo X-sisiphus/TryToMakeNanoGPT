@@ -747,6 +747,60 @@ wrong_station_or_record: 5.00%
 
 这个结果是温和正结果。hard binding 自身没有 hard-only 高，但没有造成能力崩塌；multi-station 和 distractor 反而略有提升。它说明当前更合适的做法不是单独 hard binding 训练，而是把 hard binding 作为混合巩固样本，和旧能力一起复习。
 
+### 3.20 Field Extraction Scorecard
+
+为了收束这个 mini research，新增 scorecard 脚本，从多个 `field_accuracy/report.md` 中自动抽取指标：
+
+```bash
+python tools/eval/summarize_field_scorecard.py \
+  --out-csv out/field_scorecard.csv \
+  --out-md out/field_scorecard.md \
+  multi_zero=out/field_accuracy_multi_station_500_zero_shot/report.md \
+  multi_only=out/field_accuracy_multi_station_500_after_train/report.md \
+  simple_mixed=out/field_accuracy_multi_station_500_after_mixed/report.md \
+  staged_refresh=out/field_accuracy_multi_station_500_after_refresh/report.md \
+  hard_only=out/field_accuracy_multi_station_500_after_hard_binding/report.md \
+  mixed_binding=out/field_accuracy_multi_station_500_after_mixed_binding/report.md \
+  hard_binding_zero=out/field_accuracy_hard_binding_800_zero_shot/report.md \
+  hard_binding_only=out/field_accuracy_hard_binding_800_after_train/report.md \
+  hard_binding_mixed=out/field_accuracy_hard_binding_800_after_mixed_binding/report.md \
+  distractor_refresh=out/field_accuracy_distractor_500_after_refresh/report.md \
+  distractor_hard_only=out/field_accuracy_distractor_500_after_hard_binding/report.md \
+  distractor_mixed_binding=out/field_accuracy_distractor_500_after_mixed_binding/report.md \
+  heldout_refresh=out/field_accuracy_heldout_template_after_refresh/report.md \
+  heldout_hard_only=out/field_accuracy_heldout_template_after_hard_binding/report.md \
+  heldout_mixed_binding=out/field_accuracy_heldout_template_after_mixed_binding/report.md
+```
+
+关键结果：
+
+```text
+checkpoint              multi-station   hard-binding   distractor   held-out
+multi_zero              18.20%          -              -            -
+multi_only              62.80%          -              81.20%       100.00%
+simple_mixed            48.40%          -              93.60%       99.00%
+staged_refresh          70.00%          -              93.80%       99.00%
+hard_binding_only       59.00%          60.50%         89.00%       98.00%
+mixed_binding           71.40%          52.62%         95.40%       99.00%
+```
+
+当前综合最好的 checkpoint 是：
+
+```text
+out/sft_mixed_binding_multi_hard_2200/ckpt.pt
+```
+
+它不是 hard binding 单项最高，但整体 trade-off 最好：
+
+```text
+multi-station: 71.40%
+distractor: 95.40%
+held-out: 99.00%
+hard binding: 52.62%
+```
+
+这一步把阶段结论从“某个任务提升了多少”推进到“如何选择综合最优模型”。这也是后续 DPO / preference optimization 的前提：必须先有稳定评测集和 baseline checkpoint，否则无法判断偏好优化到底是在改善模型，还是在破坏已有能力。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -825,6 +879,7 @@ multi-station remaining largest error: target_station_wrong_measurement 21.20%
 hard binding zero-shot: 40.12%
 hard binding after hard-only: 60.50%, but multi-station drops to 59.00%
 mixed binding: hard binding 52.62%, multi-station 71.40%, distractor 95.40%
+current best checkpoint: out/sft_mixed_binding_multi_hard_2200/ckpt.pt
 ```
 
 最终结论：
@@ -839,6 +894,7 @@ mixed binding: hard binding 52.62%, multi-station 71.40%, distractor 95.40%
 multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curriculum 的核心不是把数据都放进去，而是控制模型先学什么、后巩固什么。
 错误分析显示，剩余瓶颈不是“找不到目标 station”，而是“station 对了但 measurement 组绑定错了”。
 hard binding 说明难样本不能直接单独灌入；对小模型来说，难样本更适合作为混合复习的一部分。
+当前最优模型不是单项最高模型，而是 trade-off 最稳的 mixed binding checkpoint。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
