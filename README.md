@@ -3382,6 +3382,75 @@ all fields accuracy: 99.00%
 
 结论：混合训练揭示了新的工程问题：数据比例和采样策略很重要。下一步可以提高 multi-station 占比，或做阶段式训练，例如 `multi-station -> mixed low-lr refresh`，而不是一次性拼接。
 
+multi-station -> mixed low-lr refresh：
+
+上一步的 simple mixed 是从 hard distractor checkpoint 出发，直接喂混合数据。结果说明模型更容易保住旧能力，而不是优先学新绑定能力。
+
+所以这里换成两阶段顺序：
+
+```text
+Stage 1: hard distractor -> multi-station
+Stage 2: multi-station checkpoint -> mixed hard+multi low-lr refresh
+```
+
+直觉是：先让模型集中学会 station-measurement binding，再用较低学习率混合刷新，把 hard distractor 能力补回来，减少遗忘。
+
+训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_multi_station_500_from_hard/ckpt.pt \
+  --sft-path data/sft/field_mixed_hard_multi_1400.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 800 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-4 \
+  --out-dir out/sft_multi_then_mixed_refresh_1400
+```
+
+结果对比：
+
+```text
+multi-station zero-shot:
+all fields accuracy: 18.20%
+
+multi-station after multi-only:
+all fields accuracy: 62.80%
+
+multi-station after simple mixed:
+all fields accuracy: 48.40%
+
+multi-station after multi -> mixed low-lr refresh:
+all fields accuracy: 70.00%
+```
+
+```text
+distractor after hard:
+all fields accuracy: 93.80%
+
+distractor after multi-only:
+all fields accuracy: 81.20%
+
+distractor after simple mixed:
+all fields accuracy: 93.60%
+
+distractor after multi -> mixed low-lr refresh:
+all fields accuracy: 93.80%
+```
+
+```text
+held-out after multi -> mixed low-lr refresh:
+all fields accuracy: 99.00%
+```
+
+观察：这次 staged refresh 同时改善了两个目标。multi-station 从 multi-only 的 62.80% 提升到 70.00%，同时 distractor 回到 93.80%，没有继续牺牲 held-out template。
+
+结论：阶段顺序和学习率确实重要。直接混合训练会被旧任务和样本比例牵着走；先学绑定，再低学习率混合刷新，更适合这种小模型多能力叠加。当前新的 frontier 是 multi-station binding 的 70.00%，还没有彻底解决，但已经找到比 simple mixed 更好的训练策略。
+
 这一步把二阶段主线接起来：
 
 ```text

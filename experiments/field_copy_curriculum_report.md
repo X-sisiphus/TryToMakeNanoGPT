@@ -547,6 +547,59 @@ all fields accuracy: 99.00%
 
 这一步提醒：多能力训练不是把数据拼起来就自动解决，采样比例、训练顺序和学习率都会影响最终能力分布。
 
+### 3.17 Multi-station -> Mixed Low-lr Refresh
+
+基于 3.16 的负结果，继续尝试阶段式训练：
+
+```text
+Stage 1:
+hard distractor -> multi-station
+
+Stage 2:
+multi-station checkpoint -> mixed hard+multi low-lr refresh
+```
+
+具体做法是从 `out/sft_multi_station_500_from_hard/ckpt.pt` 初始化，使用同一个 hard distractor + multi-station 混合数据集，但把学习率降到 `1e-4`，训练 800 step。
+
+结果如下：
+
+```text
+multi-station zero-shot:
+all fields accuracy: 18.20%
+
+multi-station after multi-only:
+all fields accuracy: 62.80%
+
+multi-station after simple mixed:
+all fields accuracy: 48.40%
+
+multi-station after multi -> mixed low-lr refresh:
+all fields accuracy: 70.00%
+```
+
+```text
+distractor after hard:
+all fields accuracy: 93.80%
+
+distractor after multi-only:
+all fields accuracy: 81.20%
+
+distractor after simple mixed:
+all fields accuracy: 93.60%
+
+distractor after multi -> mixed low-lr refresh:
+all fields accuracy: 93.80%
+```
+
+```text
+held-out after multi -> mixed low-lr refresh:
+all fields accuracy: 99.00%
+```
+
+这一步说明，训练顺序比“是否混合数据”更关键。先让模型集中学习 multi-station binding，再用低学习率混合刷新，可以在保住 hard distractor 的同时，把 multi-station 从 62.80% 推到 70.00%。
+
+但这还不是彻底解决。multi-station 的剩余错误说明模型仍然没有稳定掌握“同一句多个实体时，把 station、signal、value、unit 绑定成同一组 measurement”的规则。当前 frontier 可以记录为：multi-station binding 70.00%，distractor 93.80%，held-out template 99.00%。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -620,6 +673,7 @@ hard distractor curriculum: 93.80%
 multi-station zero-shot: 18.20%
 multi-station after training: 62.80%
 mixed hard + multi: multi-station 48.40%, distractor 93.60%
+multi -> mixed low-lr refresh: multi-station 70.00%, distractor 93.80%, held-out 99.00%
 ```
 
 最终结论：
@@ -631,6 +685,7 @@ mixed hard + multi: multi-station 48.40%, distractor 93.60%
 针对 previous / negative / network 的 hard distractor curriculum 又能把整体 distractor 从 88.40% 提升到 93.80%。
 多 station 场景暴露了新的 entity-measurement binding 瓶颈，单独训练 multi-station 会提升绑定能力，但会削弱 distractor 鲁棒性。
 简单混合训练保住了 distractor，却没有充分提升 multi-station，说明多能力训练需要控制数据比例和训练顺序。
+multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curriculum 的核心不是把数据都放进去，而是控制模型先学什么、后巩固什么。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
