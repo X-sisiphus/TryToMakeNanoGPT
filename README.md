@@ -3500,6 +3500,126 @@ wrong_station_or_record: 6.40%
 
 这说明下一步数据不应该泛泛增加，而应该专门构造“目标 station 与干扰 station 使用相同 signal / 相同 unit / 相近 value / 位置反转”的 hard binding curriculum。
 
+hard binding curriculum：
+
+新增 hard binding 数据生成脚本：
+
+```bash
+python scripts/build_hard_binding_field_sft.py \
+  --out data/sft/field_hard_binding_800.jsonl \
+  --num-examples 800 \
+  --seed 1337
+```
+
+这个数据集专门制造更容易混淆的双 station 样本：
+
+```text
+same_signal: 两个 station 使用相同 signal，但 value 不同
+same_unit: 两个 station 使用相同 unit，但 signal/value 不同
+near_value: 两个 station 的数值接近
+target_first: 目标 station 在前
+target_second: 目标 station 在后
+```
+
+先做 zero-shot：
+
+```text
+hard binding zero-shot:
+all fields accuracy: 40.12%
+```
+
+再从 `multi -> mixed low-lr refresh` checkpoint 单独训练 hard binding：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_multi_then_mixed_refresh_1400/ckpt.pt \
+  --sft-path data/sft/field_hard_binding_800.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 800 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-4 \
+  --out-dir out/sft_hard_binding_800_from_refresh
+```
+
+结果：
+
+```text
+hard binding after hard-only:
+all fields accuracy: 60.50%
+
+multi-station after hard-only:
+all fields accuracy: 59.00%
+
+distractor after hard-only:
+all fields accuracy: 89.00%
+```
+
+观察：hard-only 训练能把 hard binding 从 40.12% 提到 60.50%，说明数据方向有效；但它把原 multi-station 从 70.00% 拉低到 59.00%，distractor 也从 93.80% 降到 89.00%。这说明 hard binding 难度跳跃太大，单独训练会改变模型的能力分布。
+
+所以继续做混合刷新。新增通用混合脚本：
+
+```bash
+python scripts/mix_sft_jsonl.py \
+  --inputs \
+    data/sft/field_hard_binding_800.jsonl \
+    data/sft/field_multi_station_500.jsonl \
+    data/sft/field_distractor_hard_types_900.jsonl \
+  --out data/sft/field_mixed_binding_multi_hard_2200.jsonl \
+  --shuffle \
+  --seed 1337
+```
+
+再从 `multi -> mixed low-lr refresh` checkpoint 训练：
+
+```bash
+python train_sft.py \
+  --init-from out/sft_multi_then_mixed_refresh_1400/ckpt.pt \
+  --sft-path data/sft/field_mixed_binding_multi_hard_2200.jsonl \
+  --split-mode shuffle \
+  --train-ratio 0.9 \
+  --max-iters 800 \
+  --eval-interval 100 \
+  --eval-iters 10 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-4 \
+  --out-dir out/sft_mixed_binding_multi_hard_2200
+```
+
+结果：
+
+```text
+hard binding after mixed binding:
+all fields accuracy: 52.62%
+
+multi-station after mixed binding:
+all fields accuracy: 71.40%
+
+distractor after mixed binding:
+all fields accuracy: 95.40%
+
+held-out after mixed binding:
+all fields accuracy: 99.00%
+```
+
+错误分析：
+
+```text
+multi-station after refresh:
+target_station_wrong_measurement: 21.20%
+wrong_station_or_record: 6.40%
+
+multi-station after mixed binding:
+target_station_wrong_measurement: 21.00%
+wrong_station_or_record: 5.00%
+```
+
+结论：hard binding-only 是一个负结果，说明“更难的数据”不能直接灌给小模型。mixed binding 是温和正结果：hard binding 自身从 40.12% 到 52.62%，multi-station 从 70.00% 到 71.40%，distractor 从 93.80% 到 95.40%。这次提升不大，但说明正确方向是“硬样本混合巩固”，而不是单独硬训。
+
 这一步把二阶段主线接起来：
 
 ```text

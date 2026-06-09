@@ -661,6 +661,92 @@ explicit contrastive wording
 
 这一步把问题从“模型抽取能力不足”进一步缩小到“实体与 measurement 组的绑定不足”。
 
+### 3.19 Hard Binding Curriculum
+
+基于 3.18 的错误分析，构造 hard binding 数据：
+
+```text
+same signal, different value
+same unit, different signal
+nearby numeric values
+target station first / second position reversal
+explicit contrastive wording
+```
+
+新增脚本：
+
+```bash
+python scripts/build_hard_binding_field_sft.py \
+  --out data/sft/field_hard_binding_800.jsonl \
+  --num-examples 800 \
+  --seed 1337
+```
+
+zero-shot 结果：
+
+```text
+hard binding zero-shot:
+all fields accuracy: 40.12%
+```
+
+从 `multi -> mixed low-lr refresh` checkpoint 单独训练 hard binding 后：
+
+```text
+hard binding after hard-only:
+all fields accuracy: 60.50%
+
+multi-station after hard-only:
+all fields accuracy: 59.00%
+
+distractor after hard-only:
+all fields accuracy: 89.00%
+```
+
+这是一个重要负结果。hard-only 训练确实让 hard binding 自身从 40.12% 提升到 60.50%，但同时破坏了原 multi-station 和 distractor 能力。说明“更难的数据”不能直接作为单独课程灌给小模型，否则会把模型推向一个更窄的新分布。
+
+随后构造混合集：
+
+```bash
+python scripts/mix_sft_jsonl.py \
+  --inputs \
+    data/sft/field_hard_binding_800.jsonl \
+    data/sft/field_multi_station_500.jsonl \
+    data/sft/field_distractor_hard_types_900.jsonl \
+  --out data/sft/field_mixed_binding_multi_hard_2200.jsonl \
+  --shuffle \
+  --seed 1337
+```
+
+混合刷新结果：
+
+```text
+hard binding after mixed binding:
+all fields accuracy: 52.62%
+
+multi-station after mixed binding:
+all fields accuracy: 71.40%
+
+distractor after mixed binding:
+all fields accuracy: 95.40%
+
+held-out after mixed binding:
+all fields accuracy: 99.00%
+```
+
+multi-station 错误类型对比：
+
+```text
+after refresh:
+target_station_wrong_measurement: 21.20%
+wrong_station_or_record: 6.40%
+
+after mixed binding:
+target_station_wrong_measurement: 21.00%
+wrong_station_or_record: 5.00%
+```
+
+这个结果是温和正结果。hard binding 自身没有 hard-only 高，但没有造成能力崩塌；multi-station 和 distractor 反而略有提升。它说明当前更合适的做法不是单独 hard binding 训练，而是把 hard binding 作为混合巩固样本，和旧能力一起复习。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -736,6 +822,9 @@ multi-station after training: 62.80%
 mixed hard + multi: multi-station 48.40%, distractor 93.60%
 multi -> mixed low-lr refresh: multi-station 70.00%, distractor 93.80%, held-out 99.00%
 multi-station remaining largest error: target_station_wrong_measurement 21.20%
+hard binding zero-shot: 40.12%
+hard binding after hard-only: 60.50%, but multi-station drops to 59.00%
+mixed binding: hard binding 52.62%, multi-station 71.40%, distractor 95.40%
 ```
 
 最终结论：
@@ -749,6 +838,7 @@ multi-station remaining largest error: target_station_wrong_measurement 21.20%
 简单混合训练保住了 distractor，却没有充分提升 multi-station，说明多能力训练需要控制数据比例和训练顺序。
 multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curriculum 的核心不是把数据都放进去，而是控制模型先学什么、后巩固什么。
 错误分析显示，剩余瓶颈不是“找不到目标 station”，而是“station 对了但 measurement 组绑定错了”。
+hard binding 说明难样本不能直接单独灌入；对小模型来说，难样本更适合作为混合复习的一部分。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
