@@ -3451,6 +3451,55 @@ all fields accuracy: 99.00%
 
 结论：阶段顺序和学习率确实重要。直接混合训练会被旧任务和样本比例牵着走；先学绑定，再低学习率混合刷新，更适合这种小模型多能力叠加。当前新的 frontier 是 multi-station binding 的 70.00%，还没有彻底解决，但已经找到比 simple mixed 更好的训练策略。
 
+multi-station error analysis：
+
+继续分析 70% 剩下的错误，不再只看总 accuracy。先用字段评测结果做错误归类：
+
+```bash
+python tools/eval/analyze_field_errors.py \
+  --field-accuracy out/field_accuracy_multi_station_500_after_refresh/field_accuracy.csv \
+  --out-dir out/field_error_multi_station_after_refresh
+```
+
+这个工具不会重新生成模型预测，只读取已有的 `field_accuracy.csv`，把错误分成几类：
+
+```text
+wrong_station_or_record:
+模型选中了输入中的另一个 station 或另一条 record
+
+target_station_wrong_measurement:
+station 选对了，但 signal/value/unit 搬成了另一个 measurement
+
+target_station_field_noise:
+station 选对了，但其他字段不是明显来自上下文另一组 measurement
+
+missing_field:
+输出缺字段
+```
+
+三组模型对比：
+
+```text
+multi-only:
+all correct: 62.80%
+target_station_wrong_measurement: 26.80%
+wrong_station_or_record: 8.20%
+
+simple mixed:
+all correct: 48.40%
+target_station_wrong_measurement: 29.40%
+wrong_station_or_record: 17.80%
+
+multi -> mixed low-lr refresh:
+all correct: 70.00%
+target_station_wrong_measurement: 21.20%
+wrong_station_or_record: 6.40%
+```
+
+结论：staged refresh 不只是让总分变高，它确实减少了两类绑定错误。但剩余错误里最大的仍然是 `target_station_wrong_measurement`：模型经常知道要抽哪个 station，却把另一个 station 的 signal/value/unit 绑定过来。
+
+这说明下一步数据不应该泛泛增加，而应该专门构造“目标 station 与干扰 station 使用相同 signal / 相同 unit / 相近 value / 位置反转”的 hard binding curriculum。
+
 这一步把二阶段主线接起来：
 
 ```text

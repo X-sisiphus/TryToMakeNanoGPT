@@ -600,6 +600,67 @@ all fields accuracy: 99.00%
 
 但这还不是彻底解决。multi-station 的剩余错误说明模型仍然没有稳定掌握“同一句多个实体时，把 station、signal、value、unit 绑定成同一组 measurement”的规则。当前 frontier 可以记录为：multi-station binding 70.00%，distractor 93.80%，held-out template 99.00%。
 
+### 3.18 Multi-station Error Analysis
+
+为了避免盲目继续加数据，对 multi-station 错误做字段级归因。新增分析工具：
+
+```bash
+python tools/eval/analyze_field_errors.py \
+  --field-accuracy out/field_accuracy_multi_station_500_after_refresh/field_accuracy.csv \
+  --out-dir out/field_error_multi_station_after_refresh
+```
+
+错误类型定义：
+
+```text
+wrong_station_or_record:
+模型选中了输入中的另一个 station 或另一条 record
+
+target_station_wrong_measurement:
+station 选对了，但 signal/value/unit 搬成了另一个 measurement
+
+target_station_field_noise:
+station 选对了，但其他字段不是明显来自上下文另一组 measurement
+
+missing_field:
+输出缺字段
+```
+
+三组结果对比：
+
+```text
+multi-only:
+all correct: 62.80%
+target_station_wrong_measurement: 26.80%
+wrong_station_or_record: 8.20%
+
+simple mixed:
+all correct: 48.40%
+target_station_wrong_measurement: 29.40%
+wrong_station_or_record: 17.80%
+
+multi -> mixed low-lr refresh:
+all correct: 70.00%
+target_station_wrong_measurement: 21.20%
+wrong_station_or_record: 6.40%
+```
+
+这说明 staged refresh 的提升不是偶然的：它同时降低了“选错 station”和“station 对但 measurement 绑定错”两类错误。
+
+但最大残留错误仍然是 `target_station_wrong_measurement`。也就是说，模型多数时候已经能读懂“目标 station 是谁”，但还不能稳定把这个 station 后面的 signal/value/unit 作为一个整体绑定起来。
+
+下一步更合理的课程不是继续扩大普通 multi-station 数据，而是构造 hard binding 数据：
+
+```text
+same signal, different value
+same unit, different signal
+nearby numeric values
+target station sometimes first, sometimes second
+explicit contrastive wording
+```
+
+这一步把问题从“模型抽取能力不足”进一步缩小到“实体与 measurement 组的绑定不足”。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -674,6 +735,7 @@ multi-station zero-shot: 18.20%
 multi-station after training: 62.80%
 mixed hard + multi: multi-station 48.40%, distractor 93.60%
 multi -> mixed low-lr refresh: multi-station 70.00%, distractor 93.80%, held-out 99.00%
+multi-station remaining largest error: target_station_wrong_measurement 21.20%
 ```
 
 最终结论：
@@ -686,6 +748,7 @@ multi -> mixed low-lr refresh: multi-station 70.00%, distractor 93.80%, held-out
 多 station 场景暴露了新的 entity-measurement binding 瓶颈，单独训练 multi-station 会提升绑定能力，但会削弱 distractor 鲁棒性。
 简单混合训练保住了 distractor，却没有充分提升 multi-station，说明多能力训练需要控制数据比例和训练顺序。
 multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curriculum 的核心不是把数据都放进去，而是控制模型先学什么、后巩固什么。
+错误分析显示，剩余瓶颈不是“找不到目标 station”，而是“station 对了但 measurement 组绑定错了”。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
@@ -698,6 +761,7 @@ multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curric
 - 拆解 distractor 类型，例如 previous value、negative statement、network average、uncertainty
 - 针对 previous / negative / network 做更细的 contrastive curriculum
 - 混合 hard distractor 和 multi-station 数据，减少能力互相覆盖
+- 构造 hard binding curriculum，专门处理 station 对但 measurement 绑定错的问题
 - 尝试更强 tokenizer 或数字专用表示
 - 尝试更大模型或更长训练，观察是否自然缓解 value 混淆
 - 进入 DPO / 偏好优化前，先建立稳定的结构化评测集
