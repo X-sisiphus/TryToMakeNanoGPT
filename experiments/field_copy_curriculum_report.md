@@ -801,6 +801,55 @@ hard binding: 52.62%
 
 这一步把阶段结论从“某个任务提升了多少”推进到“如何选择综合最优模型”。这也是后续 DPO / preference optimization 的前提：必须先有稳定评测集和 baseline checkpoint，否则无法判断偏好优化到底是在改善模型，还是在破坏已有能力。
 
+### 3.21 DPO Preference Optimization Smoke Test
+
+基于当前最优 checkpoint：
+
+```text
+out/sft_mixed_binding_multi_hard_2200/ckpt.pt
+```
+
+构造 DPO 偏好数据：
+
+```text
+chosen: 正确字段抽取答案
+rejected: 人工构造的错误答案
+```
+
+rejected 类型分布：
+
+```text
+wrong_signal_group: 552
+wrong_station: 534
+wrong_value_from_input: 568
+wrong_value_same_signal: 546
+```
+
+DPO 100 step 训练日志：
+
+```text
+step 0: train loss 0.6931, val loss 0.6931
+step 90: train loss 0.6879, val loss 0.6742, val pref acc 90.00%
+```
+
+step 0 的 0.6931 是正确起点，因为 policy 和 reference 初始完全相同：
+
+```text
+loss = -logsigmoid(0) = 0.6931
+```
+
+字段回测结果：
+
+```text
+checkpoint          multi-station   hard-binding   distractor   held-out
+SFT mixed binding   71.40%          52.62%         95.40%       99.00%
+DPO 100             69.80%          53.62%         95.20%       99.00%
+```
+
+结论：DPO 100 是温和 mixed result。它优化了偏好目标，hard binding 小幅提升，但 multi-station 小幅下降，distractor 基本持平，held-out 不变。
+
+这说明 DPO 的效果必须通过独立任务评测判断，不能只看 DPO loss 或 preference accuracy。当前偏好数据更像是在修 hard binding/value preference，而不是全面提升结构化抽取能力。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -880,6 +929,7 @@ hard binding zero-shot: 40.12%
 hard binding after hard-only: 60.50%, but multi-station drops to 59.00%
 mixed binding: hard binding 52.62%, multi-station 71.40%, distractor 95.40%
 current best checkpoint: out/sft_mixed_binding_multi_hard_2200/ckpt.pt
+DPO 100: hard binding 53.62%, multi-station 69.80%, distractor 95.20%, held-out 99.00%
 ```
 
 最终结论：
@@ -895,6 +945,7 @@ multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curric
 错误分析显示，剩余瓶颈不是“找不到目标 station”，而是“station 对了但 measurement 组绑定错了”。
 hard binding 说明难样本不能直接单独灌入；对小模型来说，难样本更适合作为混合复习的一部分。
 当前最优模型不是单项最高模型，而是 trade-off 最稳的 mixed binding checkpoint。
+DPO 可以优化偏好目标，但不保证主任务 accuracy 全面提升，必须用独立 scorecard 回测。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。

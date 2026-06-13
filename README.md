@@ -3800,6 +3800,54 @@ saved checkpoint to out/dpo_smoke_test/ckpt.pt
 
 观察：step 0 是正常的 0.693 起点，因为 policy 和 reference 来自同一个 checkpoint，初始时二者完全一样。smoke test 的目的不是证明 DPO 有效果，而是证明数据、logprob、reference model、loss、反传、保存 checkpoint 全链路可运行。
 
+DPO step 3: small run and scorecard：
+
+正式小跑 100 step：
+
+```bash
+python train_dpo.py \
+  --init-from out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --dpo-path data/dpo/field_mixed_binding_multi_hard_2200.jsonl \
+  --split-mode stratified \
+  --train-ratio 0.9 \
+  --max-iters 100 \
+  --eval-interval 10 \
+  --eval-iters 5 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-5 \
+  --beta 0.1 \
+  --out-dir out/dpo_field_100
+```
+
+训练日志显示 DPO 目标正常起效：
+
+```text
+step 0: train loss 0.6931, val loss 0.6931
+step 90: train loss 0.6879, val loss 0.6742, val pref acc 90.00%
+```
+
+但 DPO 是否真的有用，不能只看 preference accuracy，而要回到字段评测。和 DPO 前的 mixed binding checkpoint 对比：
+
+```text
+checkpoint          multi-station   hard-binding   distractor   held-out
+SFT mixed binding   71.40%          52.62%         95.40%       99.00%
+DPO 100             69.80%          53.62%         95.20%       99.00%
+```
+
+观察：
+
+```text
+multi-station: 71.40% -> 69.80%
+hard binding: 52.62% -> 53.62%
+distractor: 95.40% -> 95.20%
+held-out: 99.00% -> 99.00%
+```
+
+结论：这次 DPO 是温和 mixed result。它确实优化了偏好目标，也让 hard binding 小幅上升，但没有带来整体字段抽取提升；multi-station 还小幅下降。说明当前 DPO 数据更像是在修 hard binding/value preference，而不是全面提高结构化抽取能力。
+
+这一步的学习重点是：DPO 不是“必然提升模型”的魔法。它优化的是 chosen/rejected 偏好边界，最终是否改善任务，要靠独立评测集判断。对于这个小模型，DPO 的收益很容易表现为局部 trade-off。
+
 ### 2.5 评测集与实验报告
 
 第二阶段不能只看 loss，要开始建立自己的评测体系。
