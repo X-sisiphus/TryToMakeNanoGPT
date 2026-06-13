@@ -3848,6 +3848,38 @@ held-out: 99.00% -> 99.00%
 
 这一步的学习重点是：DPO 不是“必然提升模型”的魔法。它优化的是 chosen/rejected 偏好边界，最终是否改善任务，要靠独立评测集判断。对于这个小模型，DPO 的收益很容易表现为局部 trade-off。
 
+DPO step 4: preference eval by type：
+
+新增评测脚本：
+
+```text
+tools/eval/evaluate_dpo_preference.py
+```
+
+这个脚本不生成文本，只计算模型给 chosen / rejected 的答案 logprob，并按 `preference_type` 分组统计 chosen 胜率。
+
+对比 SFT baseline 和 DPO 100：
+
+```text
+preference type          SFT acc   DPO acc
+all                      96.68%    96.91%
+wrong_signal_group       98.91%    98.73%
+wrong_station            99.81%    100.00%
+wrong_value_from_input   91.37%    92.08%
+wrong_value_same_signal  96.89%    97.07%
+```
+
+平均 margin：
+
+```text
+SFT: 10.0275
+DPO: 10.4898
+```
+
+结论：DPO 确实把 preference margin 往正确方向推了一点，但 SFT baseline 本来已经能达到 96.68% preference accuracy，所以这批 DPO 数据对当前模型太容易，训练信号偏弱。这解释了为什么 DPO 100 的字段 scorecard 只是小幅 trade-off，而不是明显提升。
+
+下一轮如果继续研究 DPO，应该构造更难的 rejected，例如只改 value 的最后一位、交换同 signal 同 unit 的两个 station、或使用模型自己真实生成的错误作为 rejected。
+
 ### 2.5 评测集与实验报告
 
 第二阶段不能只看 loss，要开始建立自己的评测体系。

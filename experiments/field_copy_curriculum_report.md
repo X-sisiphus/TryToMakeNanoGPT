@@ -850,6 +850,46 @@ DPO 100             69.80%          53.62%         95.20%       99.00%
 
 这说明 DPO 的效果必须通过独立任务评测判断，不能只看 DPO loss 或 preference accuracy。当前偏好数据更像是在修 hard binding/value preference，而不是全面提升结构化抽取能力。
 
+### 3.22 DPO Preference Evaluation by Type
+
+为了判断 DPO 到底学会了哪类偏好，新增脚本：
+
+```text
+tools/eval/evaluate_dpo_preference.py
+```
+
+该脚本不生成文本，只计算：
+
+```text
+logp(chosen answer)
+logp(rejected answer)
+margin = chosen_logp - rejected_logp
+```
+
+然后按 `preference_type` 汇总。
+
+结果：
+
+```text
+preference type          SFT acc   DPO acc
+all                      96.68%    96.91%
+wrong_signal_group       98.91%    98.73%
+wrong_station            99.81%    100.00%
+wrong_value_from_input   91.37%    92.08%
+wrong_value_same_signal  96.89%    97.07%
+```
+
+平均 margin：
+
+```text
+SFT: 10.0275
+DPO: 10.4898
+```
+
+这说明 DPO 100 确实增强了一点 chosen/rejected margin，但提升很小。关键原因是：SFT baseline 已经能以 96.68% 的准确率选中 chosen，所以当前 rejected 对模型来说太容易，DPO 训练信号不够强。
+
+这也解释了 3.21 的 mixed result：DPO loss 在下降，preference accuracy 看起来不错，但独立字段 scorecard 没有明显提升。下一步如果继续做 DPO，需要构造 harder rejected，而不是继续增加同类 easy preference。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -930,6 +970,7 @@ hard binding after hard-only: 60.50%, but multi-station drops to 59.00%
 mixed binding: hard binding 52.62%, multi-station 71.40%, distractor 95.40%
 current best checkpoint: out/sft_mixed_binding_multi_hard_2200/ckpt.pt
 DPO 100: hard binding 53.62%, multi-station 69.80%, distractor 95.20%, held-out 99.00%
+DPO preference eval: SFT 96.68%, DPO 96.91%
 ```
 
 最终结论：
@@ -946,6 +987,7 @@ multi-station -> mixed low-lr refresh 比 simple mixed 更有效，说明 curric
 hard binding 说明难样本不能直接单独灌入；对小模型来说，难样本更适合作为混合复习的一部分。
 当前最优模型不是单项最高模型，而是 trade-off 最稳的 mixed binding checkpoint。
 DPO 可以优化偏好目标，但不保证主任务 accuracy 全面提升，必须用独立 scorecard 回测。
+DPO 数据如果对 SFT baseline 已经过于容易，DPO 只能带来很弱的边际收益。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。
