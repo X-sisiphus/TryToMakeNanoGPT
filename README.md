@@ -3880,6 +3880,71 @@ DPO: 10.4898
 
 下一轮如果继续研究 DPO，应该构造更难的 rejected，例如只改 value 的最后一位、交换同 signal 同 unit 的两个 station、或使用模型自己真实生成的错误作为 rejected。
 
+DPO step 5: hard value rejected：
+
+上一批 DPO 数据对 SFT baseline 太容易：
+
+```text
+SFT preference accuracy: 96.68%
+```
+
+所以新增 hard value DPO 构造脚本：
+
+```text
+scripts/build_hard_value_dpo.py
+```
+
+它只做一种错误：
+
+```text
+station 正确
+signal 正确
+unit 正确
+value 替换成 input 中另一个数值
+```
+
+构造命令：
+
+```bash
+python scripts/build_hard_value_dpo.py \
+  --sft-path data/sft/field_hard_binding_800.jsonl \
+  --out data/dpo/field_hard_value_800.jsonl \
+  --seed 1337
+```
+
+生成结果：
+
+```text
+loaded 800 sft examples
+saved 788 dpo examples
+preference type: hard_wrong_value_from_input
+```
+
+这里有一个重要实现细节：不能用普通数字正则直接抓所有数字，因为 station 名里也有数字，例如 `YEBES40M`、`NYALES20`。脚本用边界约束避免把 station 名中的 `40`、`20` 当成候选 value。
+
+baseline 难度评估：
+
+```bash
+python tools/eval/evaluate_dpo_preference.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --dpo-path data/dpo/field_hard_value_800.jsonl \
+  --out-dir out/dpo_pref_eval_hard_value_sft
+```
+
+结果：
+
+```text
+SFT baseline:
+accuracy: 75.00%
+avg margin: 3.1764
+
+DPO 100:
+accuracy: 75.63%
+avg margin: 3.2077
+```
+
+结论：这批 hard value rejected 明显比上一批 easy preference 更有训练价值。SFT baseline 从 96.68% 降到 75.00%，说明模型还不能稳定区分“同字段格式、只错 value”的 chosen/rejected。旧 DPO 100 只提升到 75.63%，说明上一轮 DPO 没有真正解决 hard value preference。
+
 ### 2.5 评测集与实验报告
 
 第二阶段不能只看 loss，要开始建立自己的评测体系。
