@@ -1004,6 +1004,50 @@ steps: 50 / 100
 
 并且每次都用 hard value preference eval 和字段 scorecard 双重判断。
 
+### 3.25 Hard Value DPO Hyperparameter Ablation
+
+对 hard value DPO 做 4 组最小超参对照：
+
+```text
+A: lr 1e-5, beta 0.1, steps 100
+B: lr 5e-6, beta 0.1, steps 100
+C: lr 1e-5, beta 0.05, steps 100
+D: lr 5e-6, beta 0.05, steps 100
+```
+
+完整 hard value preference eval：
+
+```text
+checkpoint              preference acc   avg margin
+SFT baseline            75.00%           3.1764
+A lr1e-5 beta0.1        74.37%           3.4113
+B lr5e-6 beta0.1        74.49%           3.2955
+C lr1e-5 beta0.05       74.37%           3.4152
+D lr5e-6 beta0.05       74.37%           3.2972
+```
+
+所有 DPO 组都没有超过 SFT baseline。DPO 主要把 margin 推大了一点，但没有把更多样本从 wrong preference 翻成 correct preference。
+
+选择 B 组做字段回测：
+
+```text
+checkpoint              multi-station   hard-binding   distractor   held-out
+SFT mixed binding       71.40%          52.62%         95.40%       99.00%
+B lr5e-6 beta0.1        70.20%          53.12%         95.60%       99.00%
+```
+
+结论：降低学习率或 beta 不能解决当前 hard value DPO 的核心问题。B 组略微更稳，但仍然表现为 trade-off：
+
+```text
+hard binding 小涨
+distractor 小涨
+multi-station 下滑
+held-out 不变
+hard value preference accuracy 未提升
+```
+
+因此，当前阶段可以暂时收束 DPO：在这个小模型和这套偏好数据上，DPO 没有产生稳定净收益。更值得继续的方向是构造更接近模型真实生成错误的 rejected，或者进入部署/推理评测阶段，而不是继续扩大这组 DPO grid。
+
 ## 4. 关键技术收获
 
 ### 4.1 不要只看 loss
@@ -1087,6 +1131,7 @@ DPO 100: hard binding 53.62%, multi-station 69.80%, distractor 95.20%, held-out 
 DPO preference eval: SFT 96.68%, DPO 96.91%
 hard value DPO data: SFT preference accuracy 75.00%
 hard value DPO 100: preference accuracy 74.37%, hard binding 53.37%, multi-station 69.80%
+hard value DPO ablation best preference accuracy: 74.49%, still below SFT 75.00%
 ```
 
 最终结论：
@@ -1106,6 +1151,7 @@ DPO 可以优化偏好目标，但不保证主任务 accuracy 全面提升，必
 DPO 数据如果对 SFT baseline 已经过于容易，DPO 只能带来很弱的边际收益。
 更有价值的 DPO 数据应该贴近模型真实错误边界，例如只替换 value、保持其他字段正确。
 harder rejected 不保证 DPO 一定有效，还需要控制 beta、学习率、步数和能力回测。
+在当前小模型上，DPO 更容易带来局部 margin 变化和能力 trade-off，而不是稳定净提升。
 ```
 
 剩余 12% 主要是普通数字 value 的细粒度混淆。继续追 100% 可以做，但学习收益已经低于进入下一阶段。

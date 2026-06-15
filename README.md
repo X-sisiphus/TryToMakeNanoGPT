@@ -3993,6 +3993,42 @@ DPO hard value 100      69.80%          53.37%         95.80%       99.00%
 
 这说明“rejected 更难”是必要条件，但不是充分条件。当前 DPO 设置可能仍然太弱、样本太少，或者 hard value preference 与 multi-station binding 存在 trade-off。下一步如果继续 DPO，应该做超参对照，而不是直接加训练步数。
 
+DPO step 7: hard value DPO ablation：
+
+对 hard value DPO 做最小超参对照：
+
+```text
+A: lr 1e-5, beta 0.1, steps 100
+B: lr 5e-6, beta 0.1, steps 100
+C: lr 1e-5, beta 0.05, steps 100
+D: lr 5e-6, beta 0.05, steps 100
+```
+
+完整 hard value preference eval：
+
+```text
+checkpoint              preference acc   avg margin
+SFT baseline            75.00%           3.1764
+A lr1e-5 beta0.1        74.37%           3.4113
+B lr5e-6 beta0.1        74.49%           3.2955
+C lr1e-5 beta0.05       74.37%           3.4152
+D lr5e-6 beta0.05       74.37%           3.2972
+```
+
+没有任何一组超过 SFT baseline。说明当前问题不是简单调低学习率或 beta 就能解决。
+
+选择表现相对最稳的 B 组做字段回测：
+
+```text
+checkpoint              multi-station   hard-binding   distractor   held-out
+SFT mixed binding       71.40%          52.62%         95.40%       99.00%
+B lr5e-6 beta0.1        70.20%          53.12%         95.60%       99.00%
+```
+
+结论：B 组比 A 组稍稳，但仍然是 mixed result。hard binding 和 distractor 小幅提升，multi-station 下降，held-out 不变；hard value preference accuracy 仍低于 SFT baseline。
+
+阶段判断：在当前 6.57M 小模型、当前 hard value DPO 数据和当前训练规模下，DPO 没有带来稳定净收益。它可以推动 margin，但不能稳定提高 hard value preference accuracy，也不能避免 multi-station trade-off。
+
 ### 2.5 评测集与实验报告
 
 第二阶段不能只看 loss，要开始建立自己的评测体系。
