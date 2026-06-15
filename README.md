@@ -425,6 +425,14 @@ out/xxx/
 
 建议周期：2-3 个月。
 
+第二阶段总结见：
+
+```text
+experiments/stage2_summary.md
+```
+
+该总结收束了 token 数据、continued pretraining、SFT、结构化评测、curriculum、DPO 正负结果，以及为什么下一步进入推理部署阶段。
+
 ### 2.1 Tokenizer 与数据模块
 
 当前项目还是字符级建模，适合学习原理，但不适合进入真实 LLM 训练。第二阶段第一步要把数据入口升级：
