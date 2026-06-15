@@ -3945,6 +3945,54 @@ avg margin: 3.2077
 
 结论：这批 hard value rejected 明显比上一批 easy preference 更有训练价值。SFT baseline 从 96.68% 降到 75.00%，说明模型还不能稳定区分“同字段格式、只错 value”的 chosen/rejected。旧 DPO 100 只提升到 75.63%，说明上一轮 DPO 没有真正解决 hard value preference。
 
+DPO step 6: hard value DPO 100：
+
+用 hard value preference 数据训练：
+
+```bash
+python train_dpo.py \
+  --init-from out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --dpo-path data/dpo/field_hard_value_800.jsonl \
+  --split-mode stratified \
+  --train-ratio 0.9 \
+  --max-iters 100 \
+  --eval-interval 10 \
+  --eval-iters 5 \
+  --batch-size 4 \
+  --block-size 128 \
+  --learning-rate 1e-5 \
+  --beta 0.1 \
+  --out-dir out/dpo_hard_value_100
+```
+
+训练日志：
+
+```text
+step 0: train loss 0.6931, val loss 0.6931
+step 80: train loss 0.6786, val loss 0.6822, val pref acc 80.00%
+step 90: train loss 0.6846, val loss 0.6900, val pref acc 55.00%
+```
+
+由于 `eval-iters=5`、`batch-size=4`，每次只抽 20 条样本，val pref acc 抖动很大。因此最终仍然要看完整 preference eval：
+
+```text
+hard value preference:
+SFT baseline: 75.00%, avg margin 3.1764
+DPO hard value 100: 74.37%, avg margin 3.4113
+```
+
+字段 scorecard：
+
+```text
+checkpoint              multi-station   hard-binding   distractor   held-out
+SFT mixed binding       71.40%          52.62%         95.40%       99.00%
+DPO hard value 100      69.80%          53.37%         95.80%       99.00%
+```
+
+结论：这是一个负结果 / mixed result。hard value DPO 没有提升 hard value preference accuracy，虽然 avg margin 略升；字段任务上 hard binding 和 distractor 小幅提升，但 multi-station 下滑。
+
+这说明“rejected 更难”是必要条件，但不是充分条件。当前 DPO 设置可能仍然太弱、样本太少，或者 hard value preference 与 multi-station binding 存在 trade-off。下一步如果继续 DPO，应该做超参对照，而不是直接加训练步数。
+
 ### 2.5 评测集与实验报告
 
 第二阶段不能只看 loss，要开始建立自己的评测体系。
