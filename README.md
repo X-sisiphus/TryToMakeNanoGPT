@@ -4065,11 +4065,69 @@ B lr5e-6 beta0.1        70.20%          53.12%         95.60%       99.00%
 
 要做的事情：
 
-- 用 vLLM / SGLang / Transformers serving 部署模型
+- 先为当前自写 nanoGPT checkpoint 建立本地推理基准
+- 再做一个可以交互的本地 demo / API
+- 之后再学习 vLLM / SGLang / Transformers serving 部署标准模型
 - 测 latency、throughput、显存占用
 - 对比不同 batch size、上下文长度、并发数
 - 尝试 INT8 / INT4 量化
 - 做一个可以交互的 demo
+
+### 3.1 Generation Benchmark
+
+当前 checkpoint 是自写 nanoGPT 结构，不能直接交给 vLLM / SGLang 加载。因此第三阶段第一步先测本地生成速度。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_generation.py
+```
+
+运行 CPU benchmark：
+
+```bash
+python tools/eval/benchmark_generation.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --max-new-tokens 80 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --temperature 1.0 \
+  --out-dir out/generation_benchmark_sft_mixed_binding_cpu
+```
+
+运行 MPS benchmark：
+
+```bash
+USE_MPS=1 python tools/eval/benchmark_generation.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --max-new-tokens 80 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --temperature 1.0 \
+  --out-dir out/generation_benchmark_sft_mixed_binding_mps
+```
+
+结果：
+
+```text
+device   avg latency   avg tokens/s
+cpu      0.4556 s      175.58
+mps      1.1890 s       67.36
+```
+
+观察：在当前 6.57M 小模型、逐 token decode 的场景下，CPU 比 MPS 更快。原因是模型太小，MPS 调度和同步开销会抵消并行计算收益。
+
+这一步引入两个部署指标：
+
+```text
+latency:
+一次请求从开始到结束的耗时。
+
+throughput:
+单位时间生成多少 token，这里用 tokens/s 表示。
+```
+
+当前 benchmark 还暴露了一个 demo/API 必须解决的问题：模型生成 `<|endoftext|>` 后底层 `generate()` 仍会继续采样。后续做服务前，需要补“遇到 EOS 停止”的生成路径。
 
 这一阶段的输出：
 
@@ -4092,4 +4150,4 @@ B lr5e-6 beta0.1        70.20%          53.12%         95.60%       99.00%
 - RAG 能否弥补小模型知识不足
 - 天文和时空智能任务中，哪些知识适合写进参数，哪些更适合用检索增强
 
-短期最推荐的下一步：先完成 tokenizer 和数据模块。它是从第一阶段进入第二阶段的门槛，也是后面 continued pretraining、SFT、DPO 和领域评测的共同地基。
+短期最推荐的下一步：先把当前自写模型做成本地可交互 demo，并补齐 EOS 停止、latency 记录和基础错误处理。
