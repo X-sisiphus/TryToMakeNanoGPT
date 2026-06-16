@@ -301,6 +301,7 @@ class BigramLanguageModel(nn.Module):
         topK=None,
         repetitionPenalty=1.0,
         repetitionStart=0,
+        eosTokenId=None,
     ):
         assert temperature > 0
         assert repetitionPenalty >= 1.0
@@ -329,8 +330,13 @@ class BigramLanguageModel(nn.Module):
                 logits[logits < v[:, [-1]]] = -float("Inf")
             probs = torch.softmax(logits, dim=-1)
             nextIdx = torch.multinomial(
-            probs,
-            num_samples=1
+                probs,
+                num_samples=1,
             )
-            idx = torch.cat((idx,nextIdx),dim=1)
+
+            idx = torch.cat((idx, nextIdx), dim=1)
+
+            if eosTokenId is not None:
+                if torch.all(nextIdx.squeeze(-1) == eosTokenId):
+                    break
         return idx

@@ -26,6 +26,7 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=None)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--out-dir", type=str, default="out/generation_benchmark")
+    parser.add_argument("--stop-at-eos", action="store_true")
     return parser.parse_args()
 
 
@@ -62,7 +63,7 @@ def sync_if_needed(device):
 
 
 @torch.no_grad()
-def run_once(model, context, args, device):
+def run_once(model, context, args, device, eosTokenId):
     sync_if_needed(device)
     start = time.perf_counter()
     generated = model.generate(
@@ -72,6 +73,7 @@ def run_once(model, context, args, device):
         topK=args.top_k,
         repetitionPenalty=args.repetition_penalty,
         repetitionStart=context.shape[1],
+        eosTokenId=eosTokenId,
     )
     sync_if_needed(device)
     elapsed = time.perf_counter() - start
@@ -161,14 +163,22 @@ def main():
             f"prompt tokens={context.shape[1]} 超过 blockSize={model.config.blockSize}"
         )
 
+    eosTokenId = enc.eot_token if args.stop_at_eos else None
+
     for _ in range(args.warmup_runs):
-        run_once(model, context, args, device)
+        run_once(model, context, args, device, eosTokenId)
 
     rows = []
     generated = None
 
     for runIdx in range(args.num_runs):
-        elapsed, newTokens, generated = run_once(model, context, args, device)
+        elapsed, newTokens, generated = run_once(
+            model,
+            context,
+            args,
+            device,
+            eosTokenId,
+        )
         tokensPerSec = newTokens / elapsed if elapsed > 0 else 0.0
         rows.append(
             {

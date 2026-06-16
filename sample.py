@@ -74,6 +74,7 @@ with torch.no_grad():
         topK=args.top_k,
         repetitionPenalty=args.repetition_penalty,
         repetitionStart=context.shape[1],
+        eosTokenId=eosId if args.stop_at_eos else None,
     )
 
 generatedIds = generated[0].tolist()
