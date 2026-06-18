@@ -1,3 +1,6 @@
 torch
 numpy
 tiktoken
+flask
+fastapi
+uvicorn

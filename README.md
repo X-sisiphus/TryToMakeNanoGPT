@@ -37,6 +37,7 @@
 │   ├── sft/              # SFT 数据检查、编码检查、task 筛选
 │   ├── eval/             # SFT 采样对比、生成诊断、质量评测
 │   ├── plots/            # loss 曲线和消融图表
+│   ├── serve/            # 本地 FastAPI 推理服务
 │   └── experiments/      # 消融实验运行和汇总
 ├── scripts/              # SFT / 领域数据生成脚本
 ├── requirements-mps.txt  # Apple Silicon / MPS 环境依赖
@@ -4127,7 +4128,63 @@ throughput:
 单位时间生成多少 token，这里用 tokens/s 表示。
 ```
 
-当前 benchmark 还暴露了一个 demo/API 必须解决的问题：模型生成 `<|endoftext|>` 后底层 `generate()` 仍会继续采样。后续做服务前，需要补“遇到 EOS 停止”的生成路径。
+当前 benchmark 还暴露了一个 demo/API 必须解决的问题：模型生成 `<|endoftext|>` 后底层 `generate()` 仍会继续采样。现在 `generate()` 已经支持传入 `eosTokenId`，服务和采样脚本都可以选择在 EOS 处停止。
+
+### 3.2 FastAPI 本地推理服务
+
+`sample.py` 是一次性生成脚本，每次运行都会重新加载 checkpoint。服务化以后，模型在启动时只加载一次，之后每个请求只负责编码 prompt、生成 token、解码文本和返回指标。
+
+新增脚本：
+
+```text
+tools/serve/serve_fastapi.py
+```
+
+启动服务：
+
+```bash
+python tools/serve/serve_fastapi.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8010
+```
+
+检查服务状态：
+
+```bash
+curl http://127.0.0.1:8010/health
+```
+
+调用生成接口：
+
+```bash
+curl -X POST http://127.0.0.1:8010/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Instruction:\nExtract the station, signal, value, and unit from the text.\n\nInput:\nONSA reports vertical velocity of 2.4 mm/yr.\n\nAnswer:\n",
+    "max_new_tokens": 40,
+    "temperature": 0.8,
+    "top_k": 40,
+    "stop_at_eos": true
+  }'
+```
+
+接口返回内容包括：
+
+```text
+text:
+完整输出文本，包含 prompt 和生成部分。
+
+completion_text:
+只包含模型新生成的部分。
+
+latency_sec:
+这次请求的生成耗时。
+
+tokens_per_sec:
+这次请求的生成速度。
+```
+
+这一步的关键变化是：模型不再只是“能在命令行生成”，而是变成了一个可以被外部程序调用的本地推理服务。
 
 这一阶段的输出：
 
