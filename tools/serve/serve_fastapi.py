@@ -108,11 +108,15 @@ class ModelServer:
             dtype=torch.long,
             device=self.device,
         )
-        if request.use_kv_cache and context.shape[1] + request.max_new_tokens > self.model.config.blockSize:
+        if (
+            request.use_kv_cache
+            and not self.model.config.useRoPE
+            and context.shape[1] + request.max_new_tokens > self.model.config.blockSize
+        ):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "use_kv_cache=True 时，prompt_tokens + max_new_tokens "
+                    "非 RoPE 模型 use_kv_cache=True 时，prompt_tokens + max_new_tokens "
                     f"不能超过 block_size={self.model.config.blockSize}"
                 ),
             )

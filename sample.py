@@ -67,9 +67,13 @@ context = torch.tensor(
     device=device,
 )
 
-if args.use_kv_cache and context.shape[1] + args.max_new_tokens > config.blockSize:
+if (
+    args.use_kv_cache
+    and not config.useRoPE
+    and context.shape[1] + args.max_new_tokens > config.blockSize
+):
     raise ValueError(
-        "use-kv-cache 要求 prompt tokens + max-new-tokens "
+        "非 RoPE 模型使用 use-kv-cache 时，prompt tokens + max-new-tokens "
         f"不超过 blockSize={config.blockSize}"
     )
 

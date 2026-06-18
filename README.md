@@ -4381,7 +4381,23 @@ no cache    0.2903s       220.49
 kv cache    0.1553s       412.17
 ```
 
-观察：在 prompt 42 token、生成 64 token 的 CPU 测试中，KV cache 让生成速度从 220.49 tok/s 提升到 412.17 tok/s，接近 1.9 倍。当前实现为了保持位置编码和滑动窗口语义简单，要求 `prompt_tokens + max_new_tokens <= block_size`；超过这个范围时，应继续使用普通生成路径，或后续实现更完整的 sliding-window cache。
+观察：在 prompt 42 token、生成 64 token 的 CPU 测试中，KV cache 让生成速度从 220.49 tok/s 提升到 412.17 tok/s，接近 1.9 倍。
+
+当前 RoPE 模型已经支持 sliding-window KV cache：当生成长度超过 `block_size` 时，cache 只保留最近 `block_size` 个 token 的 key/value，旧 token 会被裁掉。非 RoPE 模型仍然要求 `prompt_tokens + max_new_tokens <= block_size`，因为 learned position embedding 没有超过 `block_size` 的位置表。
+
+超过 `block_size` 的长生成测试：
+
+```text
+prompt tokens: 42
+max new tokens: 160
+block_size: 128
+
+mode                  avg latency   avg tok/s
+no cache              0.9682s       165.26
+sliding kv cache      0.3821s       418.79
+```
+
+FastAPI 也验证了 `max_new_tokens=160,use_kv_cache=true` 的请求可以正常返回，此时 `total_tokens=202`，已经超过 `block_size=128`。
 
 把 KV cache 接入 FastAPI 后，服务链路也有明显收益：
 

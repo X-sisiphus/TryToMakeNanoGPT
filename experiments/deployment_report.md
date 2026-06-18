@@ -79,6 +79,14 @@ no cache    0.2903s       220.49
 kv cache    0.1553s       412.17
 ```
 
+sliding-window KV cache benchmark 固定 prompt 为 42 token，生成 160 token。此时总 token 数已经超过 `block_size=128`，缓存路径会保留最近 128 个 token 的 key/value：
+
+```text
+mode                  avg latency   avg tok/s
+no cache              0.9682s       165.26
+sliding kv cache      0.3821s       418.79
+```
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -115,12 +123,14 @@ actual prompt   no cache latency   kv cache latency
 
 第六，KV cache 在服务链路中同样有效。单请求 API 平均延迟从 0.0980 秒下降到 0.0627 秒，平均 tokens/s 从 228.61 提升到 363.64。长输出场景收益更明显，生成 64 token 时平均延迟从 0.2961 秒下降到 0.1570 秒。并发场景下，concurrency=1 和 concurrency=2 都有明显提升，但 concurrency=4 时 req/s 只从 23.90 增加到 24.62，说明此时系统更接近 CPU 资源竞争或请求排队瓶颈。
 
+第七，sliding-window KV cache 让缓存路径可以支持超过 `block_size` 的长生成。在生成 160 token 时，普通路径平均延迟为 0.9682 秒，sliding-window KV cache 平均延迟为 0.3821 秒，平均速度从 165.26 tok/s 提升到 418.79 tok/s。当前实现对 RoPE 模型启用滑动窗口缓存；非 RoPE 的 learned position embedding 模型仍然不能超过位置表长度。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是把当前 KV cache 扩展为更完整的 sliding-window cache，使它能支持超过 `block_size` 的长生成。第二是把这个自写服务和标准推理框架做对照，例如 Transformers pipeline、vLLM 或 SGLang，从而理解工程化推理系统为什么需要 batching、cache 管理和调度策略。
+下一步可以继续围绕推理优化做两件事。第一是把当前自写 KV cache 和标准推理框架做对照，例如 Transformers pipeline、vLLM 或 SGLang，从而理解工程化推理系统为什么需要 batching、paged KV cache 和调度策略。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化。

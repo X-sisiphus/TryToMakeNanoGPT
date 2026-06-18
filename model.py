@@ -118,7 +118,7 @@ class MultiHeadAttention(nn.Module):
             "tril",
             torch.tril(torch.ones(config.blockSize, config.blockSize))
         )
-    def forward(self, x, pastKv=None, useCache=False):
+    def forward(self, x, pastKv=None, useCache=False, positionOffset=None):
         B, T, C = x.shape
         q = self.query(x)
         k = self.key(x)
@@ -130,7 +130,9 @@ class MultiHeadAttention(nn.Module):
         if pastKv is not None:
             pastLength = pastKv[0].shape[1]
         if self.useRoPE:
-            q, k = apply_rope(q, k, positionOffset=pastLength)
+            if positionOffset is None:
+                positionOffset = pastLength
+            q, k = apply_rope(q, k, positionOffset=positionOffset)
         if pastKv is not None:
             pastK, pastV = pastKv
             k = torch.cat((pastK, k), dim=1)
@@ -204,10 +206,15 @@ class Block(nn.Module):
         self.ln1 = build_norm(config)
         self.ln2 = build_norm(config)
 
-    def forward(self, x, pastKv=None, useCache=False):
+    def forward(self, x, pastKv=None, useCache=False, positionOffset=None):
 
         if useCache:
-            attnOut, presentKv = self.sa(self.ln1(x), pastKv=pastKv, useCache=True)
+            attnOut, presentKv = self.sa(
+                self.ln1(x),
+                pastKv=pastKv,
+                useCache=True,
+                positionOffset=positionOffset,
+            )
             x = x + attnOut
         else:
             x = x + self.sa(self.ln1(x))
@@ -278,7 +285,7 @@ class BigramLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets, ignore_index=-100)
         return logits,loss
 
-    def forward_with_cache(self, idx, pastKvs=None, useCache=True):
+    def forward_with_cache(self, idx, pastKvs=None, useCache=True, positionOffset=None):
         B,T = idx.shape
         tokenEmbd = self.tokenEmbeddingTable(idx)
         x = tokenEmbd
@@ -286,11 +293,13 @@ class BigramLanguageModel(nn.Module):
         pastLength = 0
         if pastKvs is not None and len(pastKvs) > 0:
             pastLength = pastKvs[0][0].shape[1]
+        if positionOffset is None:
+            positionOffset = pastLength
 
         if self.positionEmbeddingTable is not None:
             positions = torch.arange(
-                pastLength,
-                pastLength + T,
+                positionOffset,
+                positionOffset + T,
                 device=idx.device,
             )
             positionEmbd = self.positionEmbeddingTable(positions)
@@ -301,7 +310,19 @@ class BigramLanguageModel(nn.Module):
 
         presentKvs = []
         for block, pastKv in zip(self.blocks, pastKvs):
-            x, presentKv = block(x, pastKv=pastKv, useCache=useCache)
+            x, presentKv = block(
+                x,
+                pastKv=pastKv,
+                useCache=useCache,
+                positionOffset=positionOffset,
+            )
+            if presentKv is not None:
+                presentK, presentV = presentKv
+                if presentK.shape[1] > self.config.blockSize:
+                    presentKv = (
+                        presentK[:, -self.config.blockSize:, :, :],
+                        presentV[:, -self.config.blockSize:, :, :],
+                    )
             presentKvs.append(presentKv)
 
         x = self.ln_f(x)
@@ -357,16 +378,29 @@ class BigramLanguageModel(nn.Module):
         assert repetitionStart >= 0
         if topK is not None:
             assert topK > 0
-        canUseKvCache = useKvCache and idx.shape[1] + maxNewTokens <= self.config.blockSize
+        canUseKvCache = useKvCache and (
+            self.config.useRoPE
+            or idx.shape[1] + maxNewTokens <= self.config.blockSize
+        )
         pastKvs = None
+        cachePosition = 0
         for _ in range(maxNewTokens):
             #剪切token
             if canUseKvCache:
                 if pastKvs is None:
-                    idxCond = idx
+                    if self.config.useRoPE:
+                        idxCond = idx[:, -self.config.blockSize:]
+                        cachePosition = idx.shape[1] - idxCond.shape[1]
+                    else:
+                        idxCond = idx
                 else:
                     idxCond = idx[:, -1:]
-                logits, pastKvs = self.forward_with_cache(idxCond, pastKvs=pastKvs)
+                logits, pastKvs = self.forward_with_cache(
+                    idxCond,
+                    pastKvs=pastKvs,
+                    positionOffset=cachePosition,
+                )
+                cachePosition += idxCond.shape[1]
             else:
                 idxCond = idx[:, -self.config.blockSize:]
                 logits, loss = self(idxCond)

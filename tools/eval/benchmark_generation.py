@@ -165,9 +165,13 @@ def main():
         raise ValueError(
             f"prompt tokens={context.shape[1]} 超过 blockSize={model.config.blockSize}"
         )
-    if args.use_kv_cache and context.shape[1] + args.max_new_tokens > model.config.blockSize:
+    if (
+        args.use_kv_cache
+        and not model.config.useRoPE
+        and context.shape[1] + args.max_new_tokens > model.config.blockSize
+    ):
         raise ValueError(
-            "use-kv-cache 要求 prompt tokens + max-new-tokens "
+            "非 RoPE 模型使用 use-kv-cache 时，prompt tokens + max-new-tokens "
             f"不超过 blockSize={model.config.blockSize}"
         )
 
