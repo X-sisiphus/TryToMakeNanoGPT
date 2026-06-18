@@ -4383,6 +4383,21 @@ kv cache    0.1553s       412.17
 
 观察：在 prompt 42 token、生成 64 token 的 CPU 测试中，KV cache 让生成速度从 220.49 tok/s 提升到 412.17 tok/s，接近 1.9 倍。当前实现为了保持位置编码和滑动窗口语义简单，要求 `prompt_tokens + max_new_tokens <= block_size`；超过这个范围时，应继续使用普通生成路径，或后续实现更完整的 sliding-window cache。
 
+把 KV cache 接入 FastAPI 后，服务链路也有明显收益：
+
+```text
+case                       no cache        kv cache
+API avg latency            0.0980s         0.0627s
+API avg tok/s              228.61          363.64
+concurrency=1 req/s        11.03           16.13
+concurrency=2 req/s        19.01           25.46
+concurrency=4 req/s        23.90           24.62
+output 64 avg latency      0.2961s         0.1570s
+output 64 avg tok/s        217.62          411.96
+```
+
+观察：KV cache 对单请求、较低并发和长输出最明显；当并发升到 4 时，总吞吐提升变小，说明瓶颈开始转向 CPU 资源竞争和请求排队。
+
 阶段性部署报告见：
 
 ```text

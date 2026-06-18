@@ -79,6 +79,28 @@ no cache    0.2903s       220.49
 kv cache    0.1553s       412.17
 ```
 
+KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
+
+```text
+case                       no cache        kv cache
+API avg latency            0.0980s         0.0627s
+API avg tok/s              228.61          363.64
+concurrency=1 req/s        11.03           16.13
+concurrency=2 req/s        19.01           25.46
+concurrency=4 req/s        23.90           24.62
+output 64 avg latency      0.2961s         0.1570s
+output 64 avg tok/s        217.62          411.96
+```
+
+上下文长度 benchmark 中，启用 KV cache 后，固定生成 16 token 的结果如下：
+
+```text
+actual prompt   no cache latency   kv cache latency
+43              0.0664s            0.0433s
+69              0.0767s            0.0435s
+107             0.0954s            0.0528s
+```
+
 ## 结果分析
 
 首先，FastAPI 封装本身在本地小模型场景下不是主要瓶颈。API 单请求 benchmark 中，端到端延迟约 0.0980 秒，服务端生成延迟约 0.0962 秒，HTTP 额外开销只有约 0.0018 秒。这说明当前系统的主要耗时仍然来自模型逐 token 生成，而不是 JSON 解析或 HTTP 请求。
@@ -91,11 +113,13 @@ kv cache    0.1553s       412.17
 
 第五，KV cache 能显著减少重复计算。普通生成路径每一步都会重新计算整段上下文的 key/value；缓存路径只在第一步处理 prompt，之后每次只处理新增 token，并复用历史 key/value。在本次 CPU 测试中，生成 64 token 的平均延迟从 0.2903 秒降到 0.1553 秒，平均速度从 220.49 tok/s 提升到 412.17 tok/s。
 
+第六，KV cache 在服务链路中同样有效。单请求 API 平均延迟从 0.0980 秒下降到 0.0627 秒，平均 tokens/s 从 228.61 提升到 363.64。长输出场景收益更明显，生成 64 token 时平均延迟从 0.2961 秒下降到 0.1570 秒。并发场景下，concurrency=1 和 concurrency=2 都有明显提升，但 concurrency=4 时 req/s 只从 23.90 增加到 24.62，说明此时系统更接近 CPU 资源竞争或请求排队瓶颈。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，是推理优化中最核心的机制之一。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
 
 ## 后续方向
 
