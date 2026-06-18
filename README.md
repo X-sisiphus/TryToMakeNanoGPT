@@ -4590,6 +4590,27 @@ endpoint           concurrency   req/s   output tok/s   avg latency   p95 latenc
 
 观察：低并发时，dynamic batching 会额外等待约 5 ms，所以单请求延迟略高；高并发时，它把多个请求合并到一次模型 forward，concurrency=8 时平均合批大小达到 8，吞吐从 17.88 req/s 提升到 42.85 req/s，平均延迟也从 0.4426 秒降到 0.1858 秒。这体现了推理系统里的核心取舍：用很小的等待窗口换更高的硬件利用率。
 
+### 3.11 Length Bucketing
+
+变长 prompt 合批时，batch 内所有样本会 pad 到最长 prompt。如果短 prompt 和长 prompt 混在一起，padding token 会变多，注意力计算里就会出现更多无效位置。length bucketing 的思路是：flush 请求时，先按 prompt token 长度排序，再把长度相近的请求放进同一个 batch。
+
+当前实现会在 `/generate_dynamic` 入队时记录 prompt token 长度，并在调度统计中记录：
+
+- batch 内 prompt 长度跨度
+- batch padding token 数
+- batch padding ratio
+
+使用 `--vary-prompts` 发送不同长度 prompt 的结果：
+
+```text
+endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency   avg batch   avg wait   avg padding
+/generate_dynamic  4             38.62   617.92         0.1034s       0.1242s      4.00        5.31ms     5.06%
+/generate_dynamic  8             47.58   761.28         0.1676s       0.1762s      8.00        5.10ms     12.01%
+/generate_dynamic  12            48.49   775.87         0.2152s       0.2469s      6.67        83.72ms    5.69%
+```
+
+观察：并发 8 时每次刚好凑成一个满 batch，padding ratio 为 12.01%。并发 12 时，调度器会拆成 8 和 4 两批，长度排序让平均 padding ratio 降到 5.69%，但第二批要等第一批推理结束，所以平均等待时间升到 83.72 ms。这说明 bucketing 可以减少 padding 浪费，但调度器还需要处理“多批串行导致尾部等待”的问题。
+
 阶段性部署报告见：
 
 ```text

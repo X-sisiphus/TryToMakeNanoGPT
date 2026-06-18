@@ -43,10 +43,11 @@ class GenerateBatchRequest(BaseModel):
 
 
 class DynamicBatchItem:
-    def __init__(self, request, future, enqueueTime):
+    def __init__(self, request, future, enqueueTime, promptLength):
         self.request = request
         self.future = future
         self.enqueueTime = enqueueTime
+        self.promptLength = promptLength
 
 
 class ModelServer:
@@ -315,6 +316,9 @@ class DynamicBatcher:
         self.batchSizes = []
         self.queueWaitMs = []
         self.batchLatencyMs = []
+        self.promptLengthSpans = []
+        self.paddingTokens = []
+        self.paddingRatios = []
 
     def is_compatible(self, left, right):
         return (
@@ -328,9 +332,16 @@ class DynamicBatcher:
         )
 
     async def generate(self, request):
+        try:
+            promptLength = len(self.server.encode(request.prompt))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if promptLength == 0:
+            raise HTTPException(status_code=400, detail="prompt 编码后为空")
+
         loop = asyncio.get_running_loop()
         future = loop.create_future()
-        item = DynamicBatchItem(request, future, time.perf_counter())
+        item = DynamicBatchItem(request, future, time.perf_counter(), promptLength)
 
         async with self.lock:
             self.pendingItems.append(item)
@@ -346,6 +357,7 @@ class DynamicBatcher:
             items = self.pendingItems
             self.pendingItems = []
 
+        items.sort(key=lambda item: item.promptLength)
         while items:
             firstItem = items.pop(0)
 
@@ -361,6 +373,7 @@ class DynamicBatcher:
                     remainingItems.append(item)
 
             await self.run_batch(batchItems)
+            remainingItems.sort(key=lambda item: item.promptLength)
             items = remainingItems
 
     async def run_batch(self, batchItems):
@@ -385,6 +398,13 @@ class DynamicBatcher:
             finishTime = time.perf_counter()
             batchLatencyMs = (finishTime - batchStartTime) * 1000
             batchSize = batchResponse["batch_size"]
+            promptLengths = [item.promptLength for item in batchItems]
+            minPromptLength = min(promptLengths)
+            maxPromptLength = max(promptLengths)
+            promptLengthSpan = maxPromptLength - minPromptLength
+            paddingTokens = maxPromptLength * batchSize - sum(promptLengths)
+            totalPromptSlots = maxPromptLength * batchSize
+            paddingRatio = paddingTokens / totalPromptSlots if totalPromptSlots > 0 else 0.0
             waitMsList = [
                 max(0.0, (batchStartTime - item.enqueueTime) * 1000)
                 for item in batchItems
@@ -396,6 +416,9 @@ class DynamicBatcher:
                 self.batchSizes.append(batchSize)
                 self.queueWaitMs.extend(waitMsList)
                 self.batchLatencyMs.append(batchLatencyMs)
+                self.promptLengthSpans.append(promptLengthSpan)
+                self.paddingTokens.append(paddingTokens)
+                self.paddingRatios.append(paddingRatio)
 
             for item, output in zip(batchItems, batchResponse["outputs"]):
                 latency = finishTime - item.enqueueTime
@@ -412,6 +435,11 @@ class DynamicBatcher:
                     "dynamic_wait_ms": self.waitSec * 1000,
                     "queue_wait_ms": queueWaitMs,
                     "batch_latency_ms": batchLatencyMs,
+                    "batch_min_prompt_tokens": minPromptLength,
+                    "batch_max_prompt_tokens": maxPromptLength,
+                    "batch_prompt_length_span": promptLengthSpan,
+                    "batch_padding_tokens": paddingTokens,
+                    "batch_padding_ratio": paddingRatio,
                 }
                 item.future.set_result(result)
         except Exception as exc:
@@ -423,6 +451,9 @@ class DynamicBatcher:
             batchSizes = list(self.batchSizes)
             queueWaitMs = list(self.queueWaitMs)
             batchLatencyMs = list(self.batchLatencyMs)
+            promptLengthSpans = list(self.promptLengthSpans)
+            paddingTokens = list(self.paddingTokens)
+            paddingRatios = list(self.paddingRatios)
             totalRequests = self.totalRequests
             totalBatches = self.totalBatches
 
@@ -443,6 +474,9 @@ class DynamicBatcher:
             "max_observed_batch_size": max(batchSizes),
             "avg_queue_wait_ms": statistics.mean(queueWaitMs) if queueWaitMs else 0.0,
             "avg_batch_latency_ms": statistics.mean(batchLatencyMs),
+            "avg_prompt_length_span": statistics.mean(promptLengthSpans),
+            "avg_padding_tokens_per_batch": statistics.mean(paddingTokens),
+            "avg_padding_ratio": statistics.mean(paddingRatios),
             "batch_size_histogram": {
                 str(size): batchSizes.count(size)
                 for size in sorted(set(batchSizes))
