@@ -4265,6 +4265,43 @@ concurrency   req/s   output tok/s   avg latency   p95 latency
 
 观察：并发从 1 提到 4 后，整体吞吐从 11.03 req/s 提升到 23.90 req/s，但平均延迟也从 0.0905 秒上升到 0.1638 秒。这说明当前服务在本地小模型场景下可以通过并发提高吞吐，但请求之间会出现排队和资源竞争。部署时需要在吞吐和延迟之间做取舍。
 
+### 3.5 Context Length Benchmark
+
+上下文长度 benchmark 用来观察 prompt 变长时，固定输出长度下的延迟变化。真实部署中，长 prompt 会增加 prefill 成本，也会让后续逐 token decode 时处理更长的历史上下文。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_context_length.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_context_length.py \
+  --url http://127.0.0.1:8010/generate \
+  --context-lengths 32,64,96,112 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --max-new-tokens 16 \
+  --temperature 0.8 \
+  --top-k 40 \
+  --stop-at-eos \
+  --out-dir out/context_length_sft_mixed_binding_cpu
+```
+
+本次 CPU 结果：
+
+```text
+target ctx   actual prompt   avg latency   avg tok/s
+32           43              0.0664s       247.16
+64           69              0.0767s       213.41
+96           107             0.0954s       171.06
+112          121             0.0953s       171.12
+```
+
+观察：在固定最多生成 16 个 token 的情况下，prompt 从 43 token 增加到 121 token，平均延迟从 0.0664 秒上升到约 0.095 秒，生成速度从 247 tok/s 下降到约 171 tok/s。当前模型没有 KV cache，每生成一个 token 都会重新计算最近 `block_size` 范围内的上下文，所以 prompt 越长，单步生成越慢。
+
 这一阶段的输出：
 
 - 一个可运行服务
