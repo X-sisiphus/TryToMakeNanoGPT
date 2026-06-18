@@ -144,16 +144,16 @@ sequential  4       0.2061s       360.67      19.64
 sequential  8       0.4403s       363.43      18.17
 ```
 
-最后实现教学版 dynamic batching。客户端仍然发送单条 `/generate_dynamic` 请求，服务端等待 5 ms，把同一时间窗口内采样参数一致的请求自动合并成 batch。并发 benchmark 对比如下：
+最后实现教学版 dynamic batching。客户端仍然发送单条 `/generate_dynamic` 请求，服务端等待 5 ms，把同一时间窗口内采样参数一致的请求自动合并成 batch。接口 `/dynamic_stats` 用来观察累计调度统计。并发 benchmark 对比如下：
 
 ```text
-endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency
-/generate          1             18.84   376.86         0.0530s       0.0537s
-/generate_dynamic  1             16.14   322.86         0.0618s       0.0651s
-/generate          4             32.98   659.70         0.1196s       0.1249s
-/generate_dynamic  4             33.10   662.10         0.1206s       0.1434s
-/generate          8             17.88   357.57         0.4426s       0.4648s
-/generate_dynamic  8             42.71   854.29         0.1864s       0.1880s
+endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency   avg batch   avg wait
+/generate          1             18.84   376.86         0.0530s       0.0537s      1.00        0.00ms
+/generate_dynamic  1             16.19   323.76         0.0617s       0.0632s      1.00        5.73ms
+/generate          4             32.98   659.70         0.1196s       0.1249s      1.00        0.00ms
+/generate_dynamic  4             35.04   700.89         0.1139s       0.1153s      4.00        5.47ms
+/generate          8             17.88   357.57         0.4426s       0.4648s      1.00        0.00ms
+/generate_dynamic  8             42.85   857.01         0.1858s       0.1895s      8.00        5.06ms
 ```
 
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
@@ -200,7 +200,7 @@ actual prompt   no cache latency   kv cache latency
 
 第十，padding attention mask 让不同长度 prompt 可以进入同一个 batch。变长 prompt、关闭 KV cache 时，batch size 为 8 的合并请求从 sequential 的 10.50 req/s 提升到 11.96 req/s，收益有限。把变长 batch 和 KV cache 合并后，batch size 为 8 的合并请求达到 42.05 req/s，输出吞吐达到 812.14 tok/s。实现时还需要同步修正 `position_ids`，否则 left padding 会让真实 token 的位置编号整体后移，影响 RoPE 和 learned position embedding。padded/unpadded 等价性检查中，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这正是实际推理系统需要 bucketing、动态 batching、paged KV cache 和调度策略的原因。
 
-第十一，dynamic batching 把 batching 从客户端责任变成了服务端调度能力。低并发时，5 ms 等待窗口会让单请求略慢；但 concurrency=8 时，普通 `/generate` 的吞吐为 17.88 req/s，`/generate_dynamic` 达到 42.71 req/s，平均延迟也从 0.4426 秒下降到 0.1864 秒。这说明在请求足够密集时，短暂排队可以换来更高的模型计算利用率。
+第十一，dynamic batching 把 batching 从客户端责任变成了服务端调度能力。低并发时，5 ms 等待窗口会让单请求略慢；但 concurrency=8 时，平均合批大小达到 8，普通 `/generate` 的吞吐为 17.88 req/s，`/generate_dynamic` 达到 42.85 req/s，平均延迟也从 0.4426 秒下降到 0.1858 秒。这说明在请求足够密集时，短暂排队可以换来更高的模型计算利用率。新增的 `/dynamic_stats` 和 benchmark 调度字段可以直接观察平均 batch size、平均排队时间和 batch latency，避免只看端到端吞吐。
 
 ## 阶段结论
 

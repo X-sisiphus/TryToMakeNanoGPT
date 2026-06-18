@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT))
 import argparse
 import asyncio
 import os
+import statistics
 import time
 from typing import List, Optional
 
@@ -305,6 +306,15 @@ class DynamicBatcher:
         self.pendingItems = []
         self.flushTask = None
         self.lock = asyncio.Lock()
+        self.statsLock = asyncio.Lock()
+        self.reset_stats()
+
+    def reset_stats(self):
+        self.totalRequests = 0
+        self.totalBatches = 0
+        self.batchSizes = []
+        self.queueWaitMs = []
+        self.batchLatencyMs = []
 
     def is_compatible(self, left, right):
         return (
@@ -367,13 +377,29 @@ class DynamicBatcher:
         )
 
         try:
+            batchStartTime = time.perf_counter()
             batchResponse = await asyncio.to_thread(
                 self.server.generate_batch,
                 batchRequest,
             )
             finishTime = time.perf_counter()
+            batchLatencyMs = (finishTime - batchStartTime) * 1000
+            batchSize = batchResponse["batch_size"]
+            waitMsList = [
+                max(0.0, (batchStartTime - item.enqueueTime) * 1000)
+                for item in batchItems
+            ]
+
+            async with self.statsLock:
+                self.totalRequests += len(batchItems)
+                self.totalBatches += 1
+                self.batchSizes.append(batchSize)
+                self.queueWaitMs.extend(waitMsList)
+                self.batchLatencyMs.append(batchLatencyMs)
+
             for item, output in zip(batchItems, batchResponse["outputs"]):
                 latency = finishTime - item.enqueueTime
+                queueWaitMs = max(0.0, (batchStartTime - item.enqueueTime) * 1000)
                 result = {
                     **output,
                     "latency_sec": latency,
@@ -382,13 +408,46 @@ class DynamicBatcher:
                     "vocab_type": batchResponse["vocab_type"],
                     "checkpoint": batchResponse["checkpoint"],
                     "use_kv_cache": batchResponse["use_kv_cache"],
-                    "dynamic_batch_size": batchResponse["batch_size"],
+                    "dynamic_batch_size": batchSize,
                     "dynamic_wait_ms": self.waitSec * 1000,
+                    "queue_wait_ms": queueWaitMs,
+                    "batch_latency_ms": batchLatencyMs,
                 }
                 item.future.set_result(result)
         except Exception as exc:
             for item in batchItems:
                 item.future.set_exception(exc)
+
+    async def get_stats(self):
+        async with self.statsLock:
+            batchSizes = list(self.batchSizes)
+            queueWaitMs = list(self.queueWaitMs)
+            batchLatencyMs = list(self.batchLatencyMs)
+            totalRequests = self.totalRequests
+            totalBatches = self.totalBatches
+
+        if totalBatches == 0:
+            return {
+                "total_requests": 0,
+                "total_batches": 0,
+                "max_batch_size": self.maxBatchSize,
+                "wait_ms": self.waitSec * 1000,
+            }
+
+        return {
+            "total_requests": totalRequests,
+            "total_batches": totalBatches,
+            "max_batch_size": self.maxBatchSize,
+            "wait_ms": self.waitSec * 1000,
+            "avg_batch_size": statistics.mean(batchSizes),
+            "max_observed_batch_size": max(batchSizes),
+            "avg_queue_wait_ms": statistics.mean(queueWaitMs) if queueWaitMs else 0.0,
+            "avg_batch_latency_ms": statistics.mean(batchLatencyMs),
+            "batch_size_histogram": {
+                str(size): batchSizes.count(size)
+                for size in sorted(set(batchSizes))
+            },
+        }
 
 
 def parse_args():
@@ -422,6 +481,10 @@ def create_app(server):
     @app.post("/generate_dynamic")
     async def generate_dynamic(request: GenerateRequest):
         return await dynamicBatcher.generate(request)
+
+    @app.get("/dynamic_stats")
+    async def dynamic_stats():
+        return await dynamicBatcher.get_stats()
 
     @app.post("/generate_batch")
     def generate_batch(request: GenerateBatchRequest):

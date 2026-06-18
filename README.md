@@ -4574,21 +4574,21 @@ sequential  8       0.4403s       363.43      18.17
 - 只合并采样参数一致的请求
 - 内部复用 `/generate_batch` 的 padding mask 和 KV cache 路径
 
-验证时，同时发送 8 个 `/generate_dynamic` 请求，返回结果中的 `dynamic_batch_size` 都为 8，说明这些单请求确实被服务端合并成了一次 batch。
+验证时，同时发送 8 个 `/generate_dynamic` 请求，返回结果中的 `dynamic_batch_size` 都为 8，说明这些单请求确实被服务端合并成了一次 batch。接口 `/dynamic_stats` 会返回累计调度统计，包括总请求数、总 batch 数、平均 batch size、平均排队时间、batch latency 和 batch size 分布。
 
 并发 benchmark 对比普通 `/generate` 和 `/generate_dynamic`，两者都开启 KV cache：
 
 ```text
-endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency
-/generate          1             18.84   376.86         0.0530s       0.0537s
-/generate_dynamic  1             16.14   322.86         0.0618s       0.0651s
-/generate          4             32.98   659.70         0.1196s       0.1249s
-/generate_dynamic  4             33.10   662.10         0.1206s       0.1434s
-/generate          8             17.88   357.57         0.4426s       0.4648s
-/generate_dynamic  8             42.71   854.29         0.1864s       0.1880s
+endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency   avg batch   avg wait
+/generate          1             18.84   376.86         0.0530s       0.0537s      1.00        0.00ms
+/generate_dynamic  1             16.19   323.76         0.0617s       0.0632s      1.00        5.73ms
+/generate          4             32.98   659.70         0.1196s       0.1249s      1.00        0.00ms
+/generate_dynamic  4             35.04   700.89         0.1139s       0.1153s      4.00        5.47ms
+/generate          8             17.88   357.57         0.4426s       0.4648s      1.00        0.00ms
+/generate_dynamic  8             42.85   857.01         0.1858s       0.1895s      8.00        5.06ms
 ```
 
-观察：低并发时，dynamic batching 会额外等待 5 ms，所以单请求延迟略高；高并发时，它把多个请求合并到一次模型 forward，concurrency=8 时吞吐从 17.88 req/s 提升到 42.71 req/s，平均延迟也从 0.4426 秒降到 0.1864 秒。这体现了推理系统里的核心取舍：用很小的等待窗口换更高的硬件利用率。
+观察：低并发时，dynamic batching 会额外等待约 5 ms，所以单请求延迟略高；高并发时，它把多个请求合并到一次模型 forward，concurrency=8 时平均合批大小达到 8，吞吐从 17.88 req/s 提升到 42.85 req/s，平均延迟也从 0.4426 秒降到 0.1858 秒。这体现了推理系统里的核心取舍：用很小的等待窗口换更高的硬件利用率。
 
 阶段性部署报告见：
 

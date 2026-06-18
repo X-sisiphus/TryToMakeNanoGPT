@@ -4,6 +4,7 @@ import json
 import os
 import statistics
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
@@ -105,6 +106,9 @@ def run_level(args, payload, concurrency, totalRequests):
                     "http_overhead_sec": max(0.0, endToEndLatency - serverLatency),
                     "new_tokens": response["new_tokens"],
                     "tokens_per_sec": response["tokens_per_sec"],
+                    "dynamic_batch_size": response.get("dynamic_batch_size", 1),
+                    "queue_wait_ms": response.get("queue_wait_ms", 0.0),
+                    "batch_latency_ms": response.get("batch_latency_ms", serverLatency * 1000),
                 }
             )
 
@@ -117,6 +121,9 @@ def summarize_level(rows, wallTime):
     serverLatencies = [row["server_latency_sec"] for row in rows]
     overheads = [row["http_overhead_sec"] for row in rows]
     newTokens = [row["new_tokens"] for row in rows]
+    dynamicBatchSizes = [row["dynamic_batch_size"] for row in rows]
+    queueWaitMs = [row["queue_wait_ms"] for row in rows]
+    batchLatencyMs = [row["batch_latency_ms"] for row in rows]
     totalTokens = sum(newTokens)
 
     return {
@@ -132,6 +139,11 @@ def summarize_level(rows, wallTime):
         "avg_server_latency_sec": statistics.mean(serverLatencies),
         "avg_http_overhead_sec": statistics.mean(overheads),
         "avg_new_tokens": statistics.mean(newTokens),
+        "avg_dynamic_batch_size": statistics.mean(dynamicBatchSizes),
+        "max_dynamic_batch_size": max(dynamicBatchSizes),
+        "avg_queue_wait_ms": statistics.mean(queueWaitMs),
+        "avg_batch_latency_ms": statistics.mean(batchLatencyMs),
+        "batch_size_histogram": dict(sorted(Counter(dynamicBatchSizes).items())),
     }
 
 
@@ -152,6 +164,9 @@ def write_outputs(args, allRows, summaries):
                 "http_overhead_sec",
                 "new_tokens",
                 "tokens_per_sec",
+                "dynamic_batch_size",
+                "queue_wait_ms",
+                "batch_latency_ms",
             ],
         )
         writer.writeheader()
@@ -173,6 +188,11 @@ def write_outputs(args, allRows, summaries):
                 "avg_server_latency_sec",
                 "avg_http_overhead_sec",
                 "avg_new_tokens",
+                "avg_dynamic_batch_size",
+                "max_dynamic_batch_size",
+                "avg_queue_wait_ms",
+                "avg_batch_latency_ms",
+                "batch_size_histogram",
             ],
         )
         writer.writeheader()
@@ -186,8 +206,8 @@ def write_outputs(args, allRows, summaries):
         f.write(f"Max new tokens: `{args.max_new_tokens}`\n\n")
 
         f.write("## Summary\n\n")
-        f.write("| concurrency | req/s | output tok/s | avg latency | p95 latency | avg server latency |\n")
-        f.write("| ---: | ---: | ---: | ---: | ---: | ---: |\n")
+        f.write("| concurrency | req/s | output tok/s | avg latency | p95 latency | avg batch | avg wait | avg batch latency |\n")
+        f.write("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
         for row in summaries:
             f.write(
                 f"| {row['concurrency']} "
@@ -195,8 +215,14 @@ def write_outputs(args, allRows, summaries):
                 f"| {row['output_tokens_per_sec']:.2f} "
                 f"| {row['avg_end_to_end_latency_sec']:.4f}s "
                 f"| {row['p95_end_to_end_latency_sec']:.4f}s "
-                f"| {row['avg_server_latency_sec']:.4f}s |\n"
+                f"| {row['avg_dynamic_batch_size']:.2f} "
+                f"| {row['avg_queue_wait_ms']:.2f}ms "
+                f"| {row['avg_batch_latency_ms']:.2f}ms |\n"
             )
+
+        f.write("\n## Observed Batch Size Per Response\n\n")
+        for row in summaries:
+            f.write(f"- concurrency {row['concurrency']}: {row['batch_size_histogram']}\n")
 
         f.write("\n## Files\n\n")
         f.write(f"- `{detailPath}`\n")
