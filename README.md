@@ -4611,6 +4611,29 @@ endpoint           concurrency   req/s   output tok/s   avg latency   p95 latenc
 
 观察：并发 8 时每次刚好凑成一个满 batch，padding ratio 为 12.01%。并发 12 时，调度器会拆成 8 和 4 两批，长度排序让平均 padding ratio 降到 5.69%，但第二批要等第一批推理结束，所以平均等待时间升到 83.72 ms。这说明 bucketing 可以减少 padding 浪费，但调度器还需要处理“多批串行导致尾部等待”的问题。
 
+### 3.12 Concurrent Batch Workers
+
+为了解决同一次 flush 里多个 batch 串行执行的问题，`/generate_dynamic` 新增了参数：
+
+```bash
+python tools/serve/serve_fastapi.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8010 \
+  --dynamic-max-concurrent-batches 2
+```
+
+它的含义是：同一个 flush 如果拆出多批，最多允许几个 batch 同时进入推理。为了避免事件循环绑定问题，实现上没有长期 worker 或全局 semaphore，而是把 batch 列表按 `max_concurrent_batches` 切成小组，再逐组 `gather`。
+
+缩小版验证结果，设置 concurrency=12、requests=12、max-new-tokens=8：
+
+```text
+workers   req/s    output tok/s   avg latency   p95 latency   avg wait
+1         67.55    512.24         0.1422s       0.1749s       41.22ms
+2         102.73   821.87         0.1095s       0.1152s       3.95ms
+```
+
+观察：2 workers 把第二批等待显著压低，平均等待从 41.22 ms 降到 3.95 ms，吞吐也提升了。但这不是无限增加 worker 的理由，因为多个 batch 同时跑会争抢 CPU/GPU 资源；真实系统需要根据硬件、模型大小和请求分布调节并行度。
+
 阶段性部署报告见：
 
 ```text

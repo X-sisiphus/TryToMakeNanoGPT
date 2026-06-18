@@ -300,10 +300,11 @@ class ModelServer:
 
 
 class DynamicBatcher:
-    def __init__(self, server, maxBatchSize=8, waitMs=5):
+    def __init__(self, server, maxBatchSize=8, waitMs=5, maxConcurrentBatches=1):
         self.server = server
         self.maxBatchSize = maxBatchSize
         self.waitSec = waitMs / 1000.0
+        self.maxConcurrentBatches = maxConcurrentBatches
         self.pendingItems = []
         self.flushTask = None
         self.lock = asyncio.Lock()
@@ -319,6 +320,7 @@ class DynamicBatcher:
         self.promptLengthSpans = []
         self.paddingTokens = []
         self.paddingRatios = []
+        self.flushBatchCounts = []
 
     def is_compatible(self, left, right):
         return (
@@ -357,6 +359,18 @@ class DynamicBatcher:
             items = self.pendingItems
             self.pendingItems = []
 
+        batches = self.build_batches(items)
+        async with self.statsLock:
+            self.flushBatchCounts.append(len(batches))
+
+        for startIdx in range(0, len(batches), self.maxConcurrentBatches):
+            batchGroup = batches[startIdx:startIdx + self.maxConcurrentBatches]
+            await asyncio.gather(
+                *[self.run_batch(batchItems) for batchItems in batchGroup]
+            )
+
+    def build_batches(self, items):
+        batches = []
         items.sort(key=lambda item: item.promptLength)
         while items:
             firstItem = items.pop(0)
@@ -372,9 +386,10 @@ class DynamicBatcher:
                 else:
                     remainingItems.append(item)
 
-            await self.run_batch(batchItems)
+            batches.append(batchItems)
             remainingItems.sort(key=lambda item: item.promptLength)
             items = remainingItems
+        return batches
 
     async def run_batch(self, batchItems):
         firstRequest = batchItems[0].request
@@ -454,6 +469,7 @@ class DynamicBatcher:
             promptLengthSpans = list(self.promptLengthSpans)
             paddingTokens = list(self.paddingTokens)
             paddingRatios = list(self.paddingRatios)
+            flushBatchCounts = list(self.flushBatchCounts)
             totalRequests = self.totalRequests
             totalBatches = self.totalBatches
 
@@ -462,6 +478,7 @@ class DynamicBatcher:
                 "total_requests": 0,
                 "total_batches": 0,
                 "max_batch_size": self.maxBatchSize,
+                "max_concurrent_batches": self.maxConcurrentBatches,
                 "wait_ms": self.waitSec * 1000,
             }
 
@@ -469,6 +486,7 @@ class DynamicBatcher:
             "total_requests": totalRequests,
             "total_batches": totalBatches,
             "max_batch_size": self.maxBatchSize,
+            "max_concurrent_batches": self.maxConcurrentBatches,
             "wait_ms": self.waitSec * 1000,
             "avg_batch_size": statistics.mean(batchSizes),
             "max_observed_batch_size": max(batchSizes),
@@ -477,6 +495,8 @@ class DynamicBatcher:
             "avg_prompt_length_span": statistics.mean(promptLengthSpans),
             "avg_padding_tokens_per_batch": statistics.mean(paddingTokens),
             "avg_padding_ratio": statistics.mean(paddingRatios),
+            "avg_batches_per_flush": statistics.mean(flushBatchCounts),
+            "max_batches_per_flush": max(flushBatchCounts),
             "batch_size_histogram": {
                 str(size): batchSizes.count(size)
                 for size in sorted(set(batchSizes))
@@ -490,12 +510,25 @@ def parse_args():
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--use-mps", action="store_true")
+    parser.add_argument("--dynamic-max-batch-size", type=int, default=8)
+    parser.add_argument("--dynamic-wait-ms", type=float, default=5.0)
+    parser.add_argument("--dynamic-max-concurrent-batches", type=int, default=1)
     return parser.parse_args()
 
 
-def create_app(server):
+def create_app(
+    server,
+    dynamicMaxBatchSize=8,
+    dynamicWaitMs=5.0,
+    dynamicMaxConcurrentBatches=1,
+):
     app = FastAPI(title="nanoGPT Inference Server")
-    dynamicBatcher = DynamicBatcher(server)
+    dynamicBatcher = DynamicBatcher(
+        server,
+        maxBatchSize=dynamicMaxBatchSize,
+        waitMs=dynamicWaitMs,
+        maxConcurrentBatches=dynamicMaxConcurrentBatches,
+    )
 
     @app.get("/health")
     def health():
@@ -531,11 +564,22 @@ def main():
     args = parse_args()
     device = "mps" if torch.backends.mps.is_available() and args.use_mps else "cpu"
     server = ModelServer(args.checkpoint, device)
-    app = create_app(server)
+    app = create_app(
+        server,
+        dynamicMaxBatchSize=args.dynamic_max_batch_size,
+        dynamicWaitMs=args.dynamic_wait_ms,
+        dynamicMaxConcurrentBatches=args.dynamic_max_concurrent_batches,
+    )
 
     print(f"loaded checkpoint: {args.checkpoint}", flush=True)
     print(f"using device: {device}", flush=True)
     print(f"vocab type: {server.vocabType}", flush=True)
+    print(f"dynamic max batch size: {args.dynamic_max_batch_size}", flush=True)
+    print(f"dynamic wait ms: {args.dynamic_wait_ms}", flush=True)
+    print(
+        f"dynamic max concurrent batches: {args.dynamic_max_concurrent_batches}",
+        flush=True,
+    )
 
     uvicorn.run(app, host=args.host, port=args.port)
 
