@@ -4337,6 +4337,12 @@ target output   avg new tokens   avg latency   avg tok/s
 
 观察：输出 token 数从 8 增加到 64 后，总延迟从 0.0340 秒增加到 0.2961 秒，基本呈线性增长。原因是当前生成是逐 token decode，每多生成一个 token，就要多做一次模型 forward。tokens/s 略有下降，是因为序列越来越长，每一步 attention 看到的上下文也会变长。
 
+阶段性部署报告见：
+
+```text
+experiments/deployment_report.md
+```
+
 这一阶段的输出：
 
 - 一个可运行服务
