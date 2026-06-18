@@ -4302,6 +4302,41 @@ target ctx   actual prompt   avg latency   avg tok/s
 
 观察：在固定最多生成 16 个 token 的情况下，prompt 从 43 token 增加到 121 token，平均延迟从 0.0664 秒上升到约 0.095 秒，生成速度从 247 tok/s 下降到约 171 tok/s。当前模型没有 KV cache，每生成一个 token 都会重新计算最近 `block_size` 范围内的上下文，所以 prompt 越长，单步生成越慢。
 
+### 3.6 Output Length Benchmark
+
+输出长度 benchmark 用来观察生成 token 数变多时的延迟变化。为了避免 EOS 提前停止影响横向比较，这次不启用 `--stop-at-eos`，让每组尽量生成固定数量的 token。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_output_length.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_output_length.py \
+  --url http://127.0.0.1:8010/generate \
+  --output-lengths 8,16,32,64 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --temperature 0.8 \
+  --top-k 40 \
+  --out-dir out/output_length_sft_mixed_binding_cpu
+```
+
+本次 CPU 结果：
+
+```text
+target output   avg new tokens   avg latency   avg tok/s
+8               8.0              0.0340s       248.85
+16              16.0             0.0703s       237.24
+32              32.0             0.1385s       233.91
+64              64.0             0.2961s       217.62
+```
+
+观察：输出 token 数从 8 增加到 64 后，总延迟从 0.0340 秒增加到 0.2961 秒，基本呈线性增长。原因是当前生成是逐 token decode，每多生成一个 token，就要多做一次模型 forward。tokens/s 略有下降，是因为序列越来越长，每一步 attention 看到的上下文也会变长。
+
 这一阶段的输出：
 
 - 一个可运行服务
