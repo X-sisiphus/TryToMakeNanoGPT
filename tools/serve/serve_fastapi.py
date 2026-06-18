@@ -300,10 +300,24 @@ class ModelServer:
 
 
 class DynamicBatcher:
-    def __init__(self, server, maxBatchSize=8, waitMs=5, maxConcurrentBatches=1):
+    def __init__(
+        self,
+        server,
+        maxBatchSize=8,
+        waitMs=5,
+        maxConcurrentBatches=1,
+        adaptiveWait=False,
+        minWaitMs=None,
+        maxWaitMs=None,
+    ):
         self.server = server
         self.maxBatchSize = maxBatchSize
         self.waitSec = waitMs / 1000.0
+        self.adaptiveWait = adaptiveWait
+        self.minWaitSec = (minWaitMs if minWaitMs is not None else waitMs) / 1000.0
+        self.maxWaitSec = (maxWaitMs if maxWaitMs is not None else waitMs) / 1000.0
+        if self.maxWaitSec < self.minWaitSec:
+            raise ValueError("dynamic max wait ms 不能小于 dynamic min wait ms")
         self.maxConcurrentBatches = maxConcurrentBatches
         self.pendingItems = []
         self.flushTask = None
@@ -321,6 +335,7 @@ class DynamicBatcher:
         self.paddingTokens = []
         self.paddingRatios = []
         self.flushBatchCounts = []
+        self.flushWaitMs = []
 
     def is_compatible(self, left, right):
         return (
@@ -353,21 +368,38 @@ class DynamicBatcher:
         return await future
 
     async def flush_after_wait(self):
-        await asyncio.sleep(self.waitSec)
+        flushStartTime = time.perf_counter()
+        await asyncio.sleep(self.minWaitSec)
+        if self.adaptiveWait:
+            while True:
+                async with self.lock:
+                    pendingCount = len(self.pendingItems)
+                elapsedSec = time.perf_counter() - flushStartTime
+                if pendingCount >= self.maxBatchSize or elapsedSec >= self.maxWaitSec:
+                    break
+                await asyncio.sleep(min(0.001, self.maxWaitSec - elapsedSec))
 
         async with self.lock:
             items = self.pendingItems
             self.pendingItems = []
 
+        actualFlushWaitMs = (time.perf_counter() - flushStartTime) * 1000
         batches = self.build_batches(items)
         async with self.statsLock:
             self.flushBatchCounts.append(len(batches))
+            self.flushWaitMs.append(actualFlushWaitMs)
 
         for startIdx in range(0, len(batches), self.maxConcurrentBatches):
             batchGroup = batches[startIdx:startIdx + self.maxConcurrentBatches]
             await asyncio.gather(
                 *[self.run_batch(batchItems) for batchItems in batchGroup]
             )
+
+        async with self.lock:
+            if self.pendingItems:
+                self.flushTask = asyncio.create_task(self.flush_after_wait())
+            else:
+                self.flushTask = None
 
     def build_batches(self, items):
         batches = []
@@ -470,6 +502,7 @@ class DynamicBatcher:
             paddingTokens = list(self.paddingTokens)
             paddingRatios = list(self.paddingRatios)
             flushBatchCounts = list(self.flushBatchCounts)
+            flushWaitMs = list(self.flushWaitMs)
             totalRequests = self.totalRequests
             totalBatches = self.totalBatches
 
@@ -479,7 +512,10 @@ class DynamicBatcher:
                 "total_batches": 0,
                 "max_batch_size": self.maxBatchSize,
                 "max_concurrent_batches": self.maxConcurrentBatches,
+                "adaptive_wait": self.adaptiveWait,
                 "wait_ms": self.waitSec * 1000,
+                "min_wait_ms": self.minWaitSec * 1000,
+                "max_wait_ms": self.maxWaitSec * 1000,
             }
 
         return {
@@ -487,7 +523,10 @@ class DynamicBatcher:
             "total_batches": totalBatches,
             "max_batch_size": self.maxBatchSize,
             "max_concurrent_batches": self.maxConcurrentBatches,
+            "adaptive_wait": self.adaptiveWait,
             "wait_ms": self.waitSec * 1000,
+            "min_wait_ms": self.minWaitSec * 1000,
+            "max_wait_ms": self.maxWaitSec * 1000,
             "avg_batch_size": statistics.mean(batchSizes),
             "max_observed_batch_size": max(batchSizes),
             "avg_queue_wait_ms": statistics.mean(queueWaitMs) if queueWaitMs else 0.0,
@@ -497,6 +536,7 @@ class DynamicBatcher:
             "avg_padding_ratio": statistics.mean(paddingRatios),
             "avg_batches_per_flush": statistics.mean(flushBatchCounts),
             "max_batches_per_flush": max(flushBatchCounts),
+            "avg_flush_wait_ms": statistics.mean(flushWaitMs),
             "batch_size_histogram": {
                 str(size): batchSizes.count(size)
                 for size in sorted(set(batchSizes))
@@ -513,6 +553,9 @@ def parse_args():
     parser.add_argument("--dynamic-max-batch-size", type=int, default=8)
     parser.add_argument("--dynamic-wait-ms", type=float, default=5.0)
     parser.add_argument("--dynamic-max-concurrent-batches", type=int, default=1)
+    parser.add_argument("--dynamic-adaptive-wait", action="store_true")
+    parser.add_argument("--dynamic-min-wait-ms", type=float, default=None)
+    parser.add_argument("--dynamic-max-wait-ms", type=float, default=None)
     return parser.parse_args()
 
 
@@ -521,6 +564,9 @@ def create_app(
     dynamicMaxBatchSize=8,
     dynamicWaitMs=5.0,
     dynamicMaxConcurrentBatches=1,
+    dynamicAdaptiveWait=False,
+    dynamicMinWaitMs=None,
+    dynamicMaxWaitMs=None,
 ):
     app = FastAPI(title="nanoGPT Inference Server")
     dynamicBatcher = DynamicBatcher(
@@ -528,6 +574,9 @@ def create_app(
         maxBatchSize=dynamicMaxBatchSize,
         waitMs=dynamicWaitMs,
         maxConcurrentBatches=dynamicMaxConcurrentBatches,
+        adaptiveWait=dynamicAdaptiveWait,
+        minWaitMs=dynamicMinWaitMs,
+        maxWaitMs=dynamicMaxWaitMs,
     )
 
     @app.get("/health")
@@ -569,6 +618,9 @@ def main():
         dynamicMaxBatchSize=args.dynamic_max_batch_size,
         dynamicWaitMs=args.dynamic_wait_ms,
         dynamicMaxConcurrentBatches=args.dynamic_max_concurrent_batches,
+        dynamicAdaptiveWait=args.dynamic_adaptive_wait,
+        dynamicMinWaitMs=args.dynamic_min_wait_ms,
+        dynamicMaxWaitMs=args.dynamic_max_wait_ms,
     )
 
     print(f"loaded checkpoint: {args.checkpoint}", flush=True)
@@ -580,6 +632,10 @@ def main():
         f"dynamic max concurrent batches: {args.dynamic_max_concurrent_batches}",
         flush=True,
     )
+    print(f"dynamic adaptive wait: {args.dynamic_adaptive_wait}", flush=True)
+    if args.dynamic_adaptive_wait:
+        print(f"dynamic min wait ms: {args.dynamic_min_wait_ms}", flush=True)
+        print(f"dynamic max wait ms: {args.dynamic_max_wait_ms}", flush=True)
 
     uvicorn.run(app, host=args.host, port=args.port)
 

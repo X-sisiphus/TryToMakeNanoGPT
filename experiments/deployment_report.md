@@ -173,6 +173,14 @@ workers   req/s    output tok/s   avg latency   p95 latency   avg wait
 2         102.73   821.87         0.1095s       0.1152s       3.95ms
 ```
 
+最后加入可选 adaptive wait。固定 wait 的调度器只等待一个固定窗口；adaptive wait 会先等待最小时间，如果队列还没有达到一个 batch，并且没有超过最大等待时间，就继续短暂等待。实现时还修复了 flush 生命周期问题：当前 flush 推理期间新进入队列的请求，会在本轮 flush 结束后自动启动下一轮处理。缩小版 burst 场景设置为 concurrency=12、requests=12、max-new-tokens=4：
+
+```text
+strategy           req/s    output tok/s   avg latency   p95 latency   avg queue wait   avg flush wait
+fixed 5ms          104.34   417.37         0.0958s       0.1130s       3.63ms           5.49ms
+adaptive 1-8ms     144.94   567.70         0.0747s       0.0811s       2.10ms           5.59ms
+```
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -223,12 +231,14 @@ actual prompt   no cache latency   kv cache latency
 
 第十三，并行 batch worker 可以缓解多批串行造成的尾部等待。缩小版验证中，`dynamic-max-concurrent-batches=2` 将平均等待从 41.22 ms 降到 3.95 ms，吞吐从 67.55 req/s 提升到 102.73 req/s。但这不是无限增加 worker 的理由，因为多个 batch 同时推理会竞争同一份 CPU/GPU 资源。真实系统需要根据硬件利用率、模型大小、batch 大小和延迟目标调节并行度。
 
+第十四，adaptive wait 让调度器开始根据队列压力调整等待时间。缩小版 burst 测试中，adaptive 1-8 ms 相比固定 5 ms，平均延迟从 0.0958 秒降到 0.0747 秒，吞吐从 104.34 req/s 提升到 144.94 req/s。与此同时，这次实现还修复了一个重要调度 bug：如果 flush 推理期间有新请求入队，旧版本不会自动开启下一轮 flush，可能导致尾部请求挂起。修复后，每轮 flush 结束都会检查是否还有 pending 请求，并自动续跑。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是让 dynamic batching 支持按队列压力动态决定 batch size 和 wait time。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。
+下一步可以继续围绕推理优化做两件事。第一是把调度实验整理成一个总控 benchmark，自动比较 fixed wait、adaptive wait、不同 worker 数和不同并发。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。

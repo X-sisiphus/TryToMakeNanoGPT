@@ -4634,6 +4634,32 @@ workers   req/s    output tok/s   avg latency   p95 latency   avg wait
 
 观察：2 workers 把第二批等待显著压低，平均等待从 41.22 ms 降到 3.95 ms，吞吐也提升了。但这不是无限增加 worker 的理由，因为多个 batch 同时跑会争抢 CPU/GPU 资源；真实系统需要根据硬件、模型大小和请求分布调节并行度。
 
+### 3.13 Adaptive Wait
+
+固定等待窗口的问题是：低压时可能多等，高压时可能又不够灵活。当前加入了可选自适应等待：
+
+```bash
+python tools/serve/serve_fastapi.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8010 \
+  --dynamic-max-concurrent-batches 2 \
+  --dynamic-adaptive-wait \
+  --dynamic-min-wait-ms 1 \
+  --dynamic-max-wait-ms 8
+```
+
+逻辑是：先等最小时间；如果队列还没有达到一个 batch，并且没有超过最大等待时间，就继续短暂等待。实现时还修复了一个调度器生命周期问题：如果当前 flush 正在推理时又来了新请求，flush 结束后会自动启动下一轮，否则这些请求可能留在队列里不被处理。
+
+缩小版 burst 场景对比，设置 concurrency=12、requests=12、max-new-tokens=4：
+
+```text
+strategy           req/s    output tok/s   avg latency   p95 latency   avg queue wait   avg flush wait
+fixed 5ms          104.34   417.37         0.0958s       0.1130s       3.63ms           5.49ms
+adaptive 1-8ms     144.94   567.70         0.0747s       0.0811s       2.10ms           5.59ms
+```
+
+观察：这次 burst 场景里 adaptive wait 有更低的平均延迟和更高吞吐，但它不是一定优于固定等待。自适应等待真正要解决的是请求到达不均匀的问题；在稳定高并发、请求几乎同时到达时，固定等待也可能表现很好。
+
 阶段性部署报告见：
 
 ```text
