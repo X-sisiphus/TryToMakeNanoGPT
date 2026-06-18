@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--out-dir", type=str, default="out/generation_benchmark")
     parser.add_argument("--stop-at-eos", action="store_true")
+    parser.add_argument("--use-kv-cache", action="store_true")
     return parser.parse_args()
 
 
@@ -74,6 +75,7 @@ def run_once(model, context, args, device, eosTokenId):
         repetitionPenalty=args.repetition_penalty,
         repetitionStart=context.shape[1],
         eosTokenId=eosTokenId,
+        useKvCache=args.use_kv_cache,
     )
     sync_if_needed(device)
     elapsed = time.perf_counter() - start
@@ -120,6 +122,7 @@ def write_outputs(args, rows, summary, generatedText, device, promptTokens):
         f.write(f"Device: `{device}`\n")
         f.write(f"Prompt tokens: `{promptTokens}`\n")
         f.write(f"Max new tokens: `{args.max_new_tokens}`\n")
+        f.write(f"Use KV cache: `{args.use_kv_cache}`\n")
         f.write(f"Runs: `{summary['runs']}`\n\n")
 
         f.write("## Summary\n\n")
@@ -161,6 +164,11 @@ def main():
     if context.shape[1] > model.config.blockSize:
         raise ValueError(
             f"prompt tokens={context.shape[1]} 超过 blockSize={model.config.blockSize}"
+        )
+    if args.use_kv_cache and context.shape[1] + args.max_new_tokens > model.config.blockSize:
+        raise ValueError(
+            "use-kv-cache 要求 prompt tokens + max-new-tokens "
+            f"不超过 blockSize={model.config.blockSize}"
         )
 
     eosTokenId = enc.eot_token if args.stop_at_eos else None

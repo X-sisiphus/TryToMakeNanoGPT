@@ -4337,6 +4337,52 @@ target output   avg new tokens   avg latency   avg tok/s
 
 观察：输出 token 数从 8 增加到 64 后，总延迟从 0.0340 秒增加到 0.2961 秒，基本呈线性增长。原因是当前生成是逐 token decode，每多生成一个 token，就要多做一次模型 forward。tokens/s 略有下降，是因为序列越来越长，每一步 attention 看到的上下文也会变长。
 
+### 3.7 KV Cache
+
+普通自回归生成时，每生成一个新 token，模型都会把最近一整段上下文重新送入 Transformer。这样会重复计算历史 token 的 key/value。KV cache 的思路是：历史 token 的 key/value 一旦算出来，就保存在 cache 里；下一步生成时只计算新 token 的 query/key/value，再让新 token 的 query 去 attend 过去缓存的 key/value。
+
+本项目中新增了缓存生成路径：
+
+```text
+MultiHeadAttention.forward(..., pastKv, useCache)
+Block.forward(..., pastKv, useCache)
+BigramLanguageModel.forward_with_cache(...)
+BigramLanguageModel.generate(..., useKvCache=True)
+```
+
+`sample.py`、FastAPI 服务和 benchmark 脚本都支持打开 KV cache：
+
+```bash
+python sample.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --prompt "Instruction:\nExtract the station, signal, value, and unit from the text.\n\nInput:\nONSA reports vertical velocity of 2.4 mm/yr.\n\nAnswer:\n" \
+  --max-new-tokens 64 \
+  --top-k 40 \
+  --use-kv-cache
+```
+
+API 请求中也可以传入：
+
+```json
+{
+  "prompt": "...",
+  "max_new_tokens": 64,
+  "use_kv_cache": true
+}
+```
+
+正确性检查：同一段输入下，普通 full forward 和 cached incremental forward 的最后一个位置 logits 最大误差约为 `6.7e-06`，属于浮点计算顺序导致的正常微小差异。
+
+速度对比：
+
+```text
+mode        avg latency   avg tok/s
+no cache    0.2903s       220.49
+kv cache    0.1553s       412.17
+```
+
+观察：在 prompt 42 token、生成 64 token 的 CPU 测试中，KV cache 让生成速度从 220.49 tok/s 提升到 412.17 tok/s，接近 1.9 倍。当前实现为了保持位置编码和滑动窗口语义简单，要求 `prompt_tokens + max_new_tokens <= block_size`；超过这个范围时，应继续使用普通生成路径，或后续实现更完整的 sliding-window cache。
+
 阶段性部署报告见：
 
 ```text

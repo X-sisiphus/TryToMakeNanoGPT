@@ -26,6 +26,7 @@ class GenerateRequest(BaseModel):
     repetition_penalty: float = Field(default=1.0, ge=1.0)
     stop_at_eos: bool = Field(default=False)
     stop_at_text: Optional[str] = Field(default=None)
+    use_kv_cache: bool = Field(default=False)
 
 
 class ModelServer:
@@ -107,6 +108,14 @@ class ModelServer:
             dtype=torch.long,
             device=self.device,
         )
+        if request.use_kv_cache and context.shape[1] + request.max_new_tokens > self.model.config.blockSize:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "use_kv_cache=True 时，prompt_tokens + max_new_tokens "
+                    f"不能超过 block_size={self.model.config.blockSize}"
+                ),
+            )
 
         eosTokenId = self.eosTokenId if request.stop_at_eos else None
 
@@ -120,6 +129,7 @@ class ModelServer:
             repetitionPenalty=request.repetition_penalty,
             repetitionStart=context.shape[1],
             eosTokenId=eosTokenId,
+            useKvCache=request.use_kv_cache,
         )
         self.sync_if_needed()
         latency = time.perf_counter() - start
@@ -150,6 +160,7 @@ class ModelServer:
             "device": self.device,
             "vocab_type": self.vocabType,
             "checkpoint": self.checkpointPath,
+            "use_kv_cache": request.use_kv_cache,
         }
 
 

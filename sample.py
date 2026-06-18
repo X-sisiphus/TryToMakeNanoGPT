@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
     parser.add_argument("--stop-at-text", type=str, default=None)
+    parser.add_argument("--use-kv-cache", action="store_true")
     return parser.parse_args()
 
 args = parse_args()
@@ -66,6 +67,12 @@ context = torch.tensor(
     device=device,
 )
 
+if args.use_kv_cache and context.shape[1] + args.max_new_tokens > config.blockSize:
+    raise ValueError(
+        "use-kv-cache 要求 prompt tokens + max-new-tokens "
+        f"不超过 blockSize={config.blockSize}"
+    )
+
 with torch.no_grad():
     generated = model.generate(
         context,
@@ -75,6 +82,7 @@ with torch.no_grad():
         repetitionPenalty=args.repetition_penalty,
         repetitionStart=context.shape[1],
         eosTokenId=eosId if args.stop_at_eos else None,
+        useKvCache=args.use_kv_cache,
     )
 
 generatedIds = generated[0].tolist()

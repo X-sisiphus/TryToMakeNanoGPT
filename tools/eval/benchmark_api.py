@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
+    parser.add_argument("--use-kv-cache", action="store_true")
     parser.add_argument("--out-dir", type=str, default="out/api_benchmark")
     return parser.parse_args()
 
@@ -132,6 +133,7 @@ def main():
         "top_k": args.top_k,
         "repetition_penalty": args.repetition_penalty,
         "stop_at_eos": args.stop_at_eos,
+        "use_kv_cache": args.use_kv_cache,
     }
 
     for _ in range(args.warmup_runs):

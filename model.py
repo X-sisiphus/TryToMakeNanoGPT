@@ -23,10 +23,10 @@ def rotate_half(x):
     x = torch.stack((-x2, x1), dim=-1)
     return x.flatten(-2)
 
-def apply_rope(q,k):
+def apply_rope(q, k, positionOffset=0):
     _, T, _, headSize = q.shape
     assert headSize % 2 == 0
-    position = torch.arange(T, device=q.device)
+    position = torch.arange(positionOffset, positionOffset + T, device=q.device)
     dim = torch.arange(0, headSize, 2, device=q.device)
     inv_freq = 1.0 / (10000 ** (dim / headSize))
     freqs = torch.outer(position, inv_freq)
@@ -118,7 +118,7 @@ class MultiHeadAttention(nn.Module):
             "tril",
             torch.tril(torch.ones(config.blockSize, config.blockSize))
         )
-    def forward(self, x):
+    def forward(self, x, pastKv=None, useCache=False):
         B, T, C = x.shape
         q = self.query(x)
         k = self.key(x)
@@ -126,8 +126,16 @@ class MultiHeadAttention(nn.Module):
         q = q.view(B, T, self.numHeads, self.headSize)
         k = k.view(B, T, self.numKvHeads, self.headSize)
         v = v.view(B, T, self.numKvHeads, self.headSize)
+        pastLength = 0
+        if pastKv is not None:
+            pastLength = pastKv[0].shape[1]
         if self.useRoPE:
-            q, k = apply_rope(q, k)
+            q, k = apply_rope(q, k, positionOffset=pastLength)
+        if pastKv is not None:
+            pastK, pastV = pastKv
+            k = torch.cat((pastK, k), dim=1)
+            v = torch.cat((pastV, v), dim=1)
+        presentKv = (k, v) if useCache else None
         repeatNum = self.numHeads // self.numKvHeads
         k = repeat_kv(k, repeatNum)
         v = repeat_kv(v, repeatNum)
@@ -142,17 +150,20 @@ class MultiHeadAttention(nn.Module):
                 v,
                 attn_mask=None,
                 dropout_p=self.dropout.p if self.training else 0.0,
-                is_causal=True,
+                is_causal=pastKv is None,
             )
         else:
             wei = q @ k.transpose(-2, -1) * (self.headSize ** -0.5)
-            wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+            if pastKv is None:
+                wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
             wei = F.softmax(wei, dim=-1)
             wei = self.dropout(wei)
             out = wei @ v
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         out = self.proj(out)
         out = self.dropout(out)
+        if useCache:
+            return out, presentKv
         return out
 
 #FFN
@@ -193,11 +204,18 @@ class Block(nn.Module):
         self.ln1 = build_norm(config)
         self.ln2 = build_norm(config)
 
-    def forward(self, x):
+    def forward(self, x, pastKv=None, useCache=False):
 
-        x = x + self.sa(self.ln1(x))
+        if useCache:
+            attnOut, presentKv = self.sa(self.ln1(x), pastKv=pastKv, useCache=True)
+            x = x + attnOut
+        else:
+            x = x + self.sa(self.ln1(x))
+            presentKv = None
         x = x + self.ffwd(self.ln2(x))
 
+        if useCache:
+            return x, presentKv
         return x
 
 class BigramLanguageModel(nn.Module):
@@ -259,6 +277,36 @@ class BigramLanguageModel(nn.Module):
             #下面的方法会先softmax，再计算loss（对数似然损失）
             loss = F.cross_entropy(logits, targets, ignore_index=-100)
         return logits,loss
+
+    def forward_with_cache(self, idx, pastKvs=None, useCache=True):
+        B,T = idx.shape
+        tokenEmbd = self.tokenEmbeddingTable(idx)
+        x = tokenEmbd
+
+        pastLength = 0
+        if pastKvs is not None and len(pastKvs) > 0:
+            pastLength = pastKvs[0][0].shape[1]
+
+        if self.positionEmbeddingTable is not None:
+            positions = torch.arange(
+                pastLength,
+                pastLength + T,
+                device=idx.device,
+            )
+            positionEmbd = self.positionEmbeddingTable(positions)
+            x = x + positionEmbd
+
+        if pastKvs is None:
+            pastKvs = [None] * len(self.blocks)
+
+        presentKvs = []
+        for block, pastKv in zip(self.blocks, pastKvs):
+            x, presentKv = block(x, pastKv=pastKv, useCache=useCache)
+            presentKvs.append(presentKv)
+
+        x = self.ln_f(x)
+        logits = self.languageModelHead(x)
+        return logits, presentKvs
     
     def configure_optimizers(self, weightDecay, learningRate):
         decayParams = []
@@ -302,16 +350,26 @@ class BigramLanguageModel(nn.Module):
         repetitionPenalty=1.0,
         repetitionStart=0,
         eosTokenId=None,
+        useKvCache=False,
     ):
         assert temperature > 0
         assert repetitionPenalty >= 1.0
         assert repetitionStart >= 0
         if topK is not None:
             assert topK > 0
+        canUseKvCache = useKvCache and idx.shape[1] + maxNewTokens <= self.config.blockSize
+        pastKvs = None
         for _ in range(maxNewTokens):
             #剪切token
-            idxCond = idx[:, -self.config.blockSize:]
-            logits, loss = self(idxCond)
+            if canUseKvCache:
+                if pastKvs is None:
+                    idxCond = idx
+                else:
+                    idxCond = idx[:, -1:]
+                logits, pastKvs = self.forward_with_cache(idxCond, pastKvs=pastKvs)
+            else:
+                idxCond = idx[:, -self.config.blockSize:]
+                logits, loss = self(idxCond)
             logits = logits[:,-1,:]
             if repetitionPenalty > 1.0:
                 for batchIdx in range(idx.size(0)):
