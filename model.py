@@ -23,19 +23,25 @@ def rotate_half(x):
     x = torch.stack((-x2, x1), dim=-1)
     return x.flatten(-2)
 
-def apply_rope(q, k, positionOffset=0):
+def apply_rope(q, k, positionOffset=0, positionIds=None):
     _, T, _, headSize = q.shape
     assert headSize % 2 == 0
-    position = torch.arange(positionOffset, positionOffset + T, device=q.device)
     dim = torch.arange(0, headSize, 2, device=q.device)
     inv_freq = 1.0 / (10000 ** (dim / headSize))
-    freqs = torch.outer(position, inv_freq)
+    if positionIds is None:
+        position = torch.arange(positionOffset, positionOffset + T, device=q.device)
+        freqs = torch.outer(position, inv_freq)
+    else:
+        freqs = positionIds.to(q.device).float().unsqueeze(-1) * inv_freq
     cos = freqs.cos()
     sin = freqs.sin()
     cos = torch.repeat_interleave(cos, 2, dim=-1)
     sin = torch.repeat_interleave(sin, 2, dim=-1)
-    cos = cos.unsqueeze(0).unsqueeze(2)
-    sin = sin.unsqueeze(0).unsqueeze(2)
+    if positionIds is None:
+        cos = cos.unsqueeze(0)
+        sin = sin.unsqueeze(0)
+    cos = cos.unsqueeze(2)
+    sin = sin.unsqueeze(2)
     q = q * cos + rotate_half(q) * sin
     k = k * cos + rotate_half(k) * sin
     return q, k
@@ -118,7 +124,15 @@ class MultiHeadAttention(nn.Module):
             "tril",
             torch.tril(torch.ones(config.blockSize, config.blockSize))
         )
-    def forward(self, x, pastKv=None, useCache=False, positionOffset=None):
+    def forward(
+        self,
+        x,
+        pastKv=None,
+        useCache=False,
+        positionOffset=None,
+        attentionMask=None,
+        positionIds=None,
+    ):
         B, T, C = x.shape
         q = self.query(x)
         k = self.key(x)
@@ -132,7 +146,7 @@ class MultiHeadAttention(nn.Module):
         if self.useRoPE:
             if positionOffset is None:
                 positionOffset = pastLength
-            q, k = apply_rope(q, k, positionOffset=positionOffset)
+            q, k = apply_rope(q, k, positionOffset=positionOffset, positionIds=positionIds)
         if pastKv is not None:
             pastK, pastV = pastKv
             k = torch.cat((pastK, k), dim=1)
@@ -145,7 +159,7 @@ class MultiHeadAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        if self.useFlashAttention:
+        if self.useFlashAttention and attentionMask is None:
             out = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -158,6 +172,11 @@ class MultiHeadAttention(nn.Module):
             wei = q @ k.transpose(-2, -1) * (self.headSize ** -0.5)
             if pastKv is None:
                 wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+            if attentionMask is not None:
+                keyMask = attentionMask[:, None, None, :].bool()
+                queryMask = attentionMask[:, None, :, None].bool()
+                wei = wei.masked_fill(~keyMask, float("-inf"))
+                wei = torch.where(queryMask, wei, torch.zeros_like(wei))
             wei = F.softmax(wei, dim=-1)
             wei = self.dropout(wei)
             out = wei @ v
@@ -206,7 +225,15 @@ class Block(nn.Module):
         self.ln1 = build_norm(config)
         self.ln2 = build_norm(config)
 
-    def forward(self, x, pastKv=None, useCache=False, positionOffset=None):
+    def forward(
+        self,
+        x,
+        pastKv=None,
+        useCache=False,
+        positionOffset=None,
+        attentionMask=None,
+        positionIds=None,
+    ):
 
         if useCache:
             attnOut, presentKv = self.sa(
@@ -214,10 +241,12 @@ class Block(nn.Module):
                 pastKv=pastKv,
                 useCache=True,
                 positionOffset=positionOffset,
+                attentionMask=attentionMask,
+                positionIds=positionIds,
             )
             x = x + attnOut
         else:
-            x = x + self.sa(self.ln1(x))
+            x = x + self.sa(self.ln1(x), attentionMask=attentionMask, positionIds=positionIds)
             presentKv = None
         x = x + self.ffwd(self.ln2(x))
 
@@ -262,16 +291,26 @@ class BigramLanguageModel(nn.Module):
         
     #forword
     #idx是二维张量
-    def forward(self, idx, targets = None):
+    def forward(self, idx, targets = None, attentionMask=None):
         #将idx中的元素替换为对应的随机向量，将idx升维
         B,T = idx.shape
         tokenEmbd = self.tokenEmbeddingTable(idx)
         #对一个batch中T个元素0——T生成位置编码
         x = tokenEmbd
+        positionIds = None
+        if attentionMask is not None:
+            positionIds = attentionMask.long().cumsum(dim=1) - 1
+            positionIds = positionIds.clamp(min=0)
         if self.positionEmbeddingTable is not None:
-            positionEmbd = self.positionEmbeddingTable(torch.arange(T, device=idx.device))
+            if positionIds is None:
+                positionIds = torch.arange(T, device=idx.device)
+            positionEmbd = self.positionEmbeddingTable(positionIds)
             x = x + positionEmbd
-        x = self.blocks(x)
+        if attentionMask is None:
+            x = self.blocks(x)
+        else:
+            for block in self.blocks:
+                x = block(x, attentionMask=attentionMask, positionIds=positionIds)
         x = self.ln_f(x)
         logits = self.languageModelHead(x)
         if targets is None:
@@ -372,13 +411,14 @@ class BigramLanguageModel(nn.Module):
         repetitionStart=0,
         eosTokenId=None,
         useKvCache=False,
+        attentionMask=None,
     ):
         assert temperature > 0
         assert repetitionPenalty >= 1.0
         assert repetitionStart >= 0
         if topK is not None:
             assert topK > 0
-        canUseKvCache = useKvCache and (
+        canUseKvCache = attentionMask is None and useKvCache and (
             self.config.useRoPE
             or idx.shape[1] + maxNewTokens <= self.config.blockSize
         )
@@ -403,7 +443,11 @@ class BigramLanguageModel(nn.Module):
                 cachePosition += idxCond.shape[1]
             else:
                 idxCond = idx[:, -self.config.blockSize:]
-                logits, loss = self(idxCond)
+                if attentionMask is not None:
+                    attentionMaskCond = attentionMask[:, -self.config.blockSize:]
+                else:
+                    attentionMaskCond = None
+                logits, loss = self(idxCond, attentionMask=attentionMaskCond)
             logits = logits[:,-1,:]
             if repetitionPenalty > 1.0:
                 for batchIdx in range(idx.size(0)):
@@ -427,6 +471,13 @@ class BigramLanguageModel(nn.Module):
             )
 
             idx = torch.cat((idx, nextIdx), dim=1)
+            if attentionMask is not None:
+                nextMask = torch.ones(
+                    (attentionMask.shape[0], 1),
+                    dtype=attentionMask.dtype,
+                    device=attentionMask.device,
+                )
+                attentionMask = torch.cat((attentionMask, nextMask), dim=1)
 
             if eosTokenId is not None:
                 if torch.all(nextIdx.squeeze(-1) == eosTokenId):

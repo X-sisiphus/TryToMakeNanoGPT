@@ -16,6 +16,17 @@ ONSA reports vertical velocity of 2.4 mm/yr.
 Answer:
 """
 
+PROMPT_INPUTS = [
+    "ONSA reports vertical velocity of 2.4 mm/yr.",
+    "NYAL reports east displacement of 1.8 mm.",
+    "KIRU reports north velocity of -0.6 mm/yr after seasonal correction.",
+    "METS reports clock bias of 3.1 ns in the daily solution.",
+    "TROM reports tropospheric delay of 7.4 mm from the GNSS processing center.",
+    "REYK reports zenith delay of 6.2 mm during the latest observation window.",
+    "WTZR reports horizontal velocity of 0.9 mm/yr relative to the terrestrial frame.",
+    "ALGO reports up displacement of -1.2 mm after removing the common mode signal.",
+]
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -30,6 +41,7 @@ def parse_args():
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--stop-at-eos", action="store_true")
     parser.add_argument("--use-kv-cache", action="store_true")
+    parser.add_argument("--vary-prompts", action="store_true")
     parser.add_argument("--out-dir", type=str, default="out/batch_api_benchmark")
     return parser.parse_args()
 
@@ -72,9 +84,28 @@ def post_json(url, payload):
     return json.loads(responseBody), endToEndLatency
 
 
-def make_generate_payload(args):
+def build_prompt(inputText):
+    return (
+        "Instruction:\n"
+        "Extract the station, signal, value, and unit from the text.\n\n"
+        "Input:\n"
+        f"{inputText}\n\n"
+        "Answer:\n"
+    )
+
+
+def make_prompts(args, batchSize):
+    if not args.vary_prompts:
+        return [args.prompt for _ in range(batchSize)]
+    return [
+        build_prompt(PROMPT_INPUTS[idx % len(PROMPT_INPUTS)])
+        for idx in range(batchSize)
+    ]
+
+
+def make_generate_payload(args, prompt):
     return {
-        "prompt": args.prompt,
+        "prompt": prompt,
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
         "top_k": args.top_k,
@@ -86,7 +117,7 @@ def make_generate_payload(args):
 
 def make_batch_payload(args, batchSize):
     return {
-        "prompts": [args.prompt for _ in range(batchSize)],
+        "prompts": make_prompts(args, batchSize),
         "max_new_tokens": args.max_new_tokens,
         "temperature": args.temperature,
         "top_k": args.top_k,
@@ -98,10 +129,11 @@ def make_batch_payload(args, batchSize):
 
 def run_sequential(args, batchSize):
     url = args.base_url.rstrip("/") + "/generate"
-    payload = make_generate_payload(args)
+    prompts = make_prompts(args, batchSize)
     start = time.perf_counter()
     totalNewTokens = 0
-    for _ in range(batchSize):
+    for prompt in prompts:
+        payload = make_generate_payload(args, prompt)
         response, _ = post_json(url, payload)
         totalNewTokens += response["new_tokens"]
     latency = time.perf_counter() - start
@@ -147,6 +179,7 @@ def write_outputs(args, rows):
         f.write(f"Batch sizes: `{args.batch_sizes}`\n")
         f.write(f"Max new tokens: `{args.max_new_tokens}`\n")
         f.write(f"Use KV cache: `{args.use_kv_cache}`\n\n")
+        f.write(f"Vary prompts: `{args.vary_prompts}`\n\n")
 
         f.write("## Summary\n\n")
         f.write("| mode | batch | avg latency | avg tok/s | avg req/s |\n")

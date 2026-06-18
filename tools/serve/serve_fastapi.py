@@ -44,7 +44,7 @@ class ModelServer:
     def __init__(self, checkpointPath, device):
         self.checkpointPath = checkpointPath
         self.device = device
-        self.model, self.encode, self.decode, self.eosTokenId, self.vocabType = self.load_model(
+        self.model, self.encode, self.decode, self.eosTokenId, self.padTokenId, self.vocabType = self.load_model(
             checkpointPath,
             device,
         )
@@ -69,10 +69,12 @@ class ModelServer:
         vocabInfo = checkpoint["vocab"]
         vocabType = vocabInfo.get("type", "char")
         eosTokenId = None
+        padTokenId = 0
 
         if vocabType == "tokenizer":
             enc = tiktoken.get_encoding(vocabInfo["meta"]["encoding"])
             eosTokenId = enc.eot_token
+            padTokenId = eosTokenId
 
             def encode(text):
                 return enc.encode(text)
@@ -83,6 +85,7 @@ class ModelServer:
         elif vocabType == "char":
             stringToInt = vocabInfo["stringToInt"]
             intToString = vocabInfo["intToString"]
+            padTokenId = 0
 
             def encode(text):
                 try:
@@ -96,7 +99,7 @@ class ModelServer:
         else:
             raise ValueError(f"不支持的 vocab type: {vocabType}")
 
-        return model, encode, decode, eosTokenId, vocabType
+        return model, encode, decode, eosTokenId, padTokenId, vocabType
 
     def sync_if_needed(self):
         if self.device == "mps":
@@ -189,12 +192,13 @@ class ModelServer:
             raise HTTPException(status_code=400, detail="prompt 编码后为空")
 
         promptLengths = [len(promptIds) for promptIds in promptIdsList]
-        if len(set(promptLengths)) != 1:
+        hasDifferentPromptLengths = len(set(promptLengths)) != 1
+        if hasDifferentPromptLengths and request.use_kv_cache:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "教学版 batch serving 要求 batch 内 prompt token 长度一致；"
-                    f"当前长度为 {promptLengths}"
+                    "不同长度 prompt 的 batch serving 暂不支持 use_kv_cache=True；"
+                    "请先关闭 KV cache，或把 batch 内 prompt 做成相同 token 长度。"
                 ),
             )
 
@@ -211,8 +215,22 @@ class ModelServer:
                 ),
             )
 
+        maxPromptLen = max(promptLengths)
+        paddedPromptIdsList = []
+        attentionMaskList = []
+
+        for promptIds in promptIdsList:
+            padLen = maxPromptLen - len(promptIds)
+            paddedPromptIdsList.append([self.padTokenId] * padLen + promptIds)
+            attentionMaskList.append([0] * padLen + [1] * len(promptIds))
+
         context = torch.tensor(
-            promptIdsList,
+            paddedPromptIdsList,
+            dtype=torch.long,
+            device=self.device,
+        )
+        attentionMask = torch.tensor(
+            attentionMaskList,
             dtype=torch.long,
             device=self.device,
         )
@@ -229,6 +247,7 @@ class ModelServer:
             repetitionStart=context.shape[1],
             eosTokenId=eosTokenId,
             useKvCache=request.use_kv_cache,
+            attentionMask=None if request.use_kv_cache else attentionMask,
         )
         self.sync_if_needed()
         latency = time.perf_counter() - start
@@ -239,6 +258,8 @@ class ModelServer:
         for rowIdx, prompt in enumerate(request.prompts):
             generatedIds = generated[rowIdx].tolist()
             promptLen = promptLengths[rowIdx]
+            padLen = maxPromptLen - promptLen
+            generatedIds = generatedIds[padLen:]
 
             if request.stop_at_eos and eosTokenId is not None:
                 generatedTail = generatedIds[promptLen:]
