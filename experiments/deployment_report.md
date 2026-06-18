@@ -23,7 +23,7 @@ unit: mm/yr
 
 ## 实验内容
 
-本阶段主要完成了六类实验。第一类是直接测试模型内部生成速度，用来观察纯生成性能。第二类是测试 HTTP API 单请求延迟，用来观察服务封装带来的额外开销。第三类是并发请求测试，用来观察多个请求同时到达时吞吐和延迟的变化。第四类是上下文长度测试，用来观察 prompt 变长时的成本。第五类是输出长度测试，用来观察生成 token 数增加时的成本。第六类是 KV cache 测试，用来观察缓存历史 key/value 后对逐 token 生成速度的提升。
+本阶段主要完成了七类实验。第一类是直接测试模型内部生成速度，用来观察纯生成性能。第二类是测试 HTTP API 单请求延迟，用来观察服务封装带来的额外开销。第三类是并发请求测试，用来观察多个请求同时到达时吞吐和延迟的变化。第四类是上下文长度测试，用来观察 prompt 变长时的成本。第五类是输出长度测试，用来观察生成 token 数增加时的成本。第六类是 KV cache 测试，用来观察缓存历史 key/value 后对逐 token 生成速度的提升。第七类是 Transformers baseline，用来和成熟框架的标准 `generate()` 链路做初步对照。
 
 这些实验对应的脚本如下：
 
@@ -34,6 +34,7 @@ tools/eval/benchmark_api.py
 tools/eval/benchmark_api_concurrency.py
 tools/eval/benchmark_context_length.py
 tools/eval/benchmark_output_length.py
+tools/eval/benchmark_transformers_generation.py
 ```
 
 ## 结果汇总
@@ -87,6 +88,15 @@ no cache              0.9682s       165.26
 sliding kv cache      0.3821s       418.79
 ```
 
+Transformers baseline 使用 `sshleifer/tiny-gpt2`，生成 64 token：
+
+```text
+model                 avg latency   avg tok/s
+sshleifer/tiny-gpt2   0.0502s       1275.78
+```
+
+需要注意，`sshleifer/tiny-gpt2` 是极小测试模型，hidden size 只有 2，不能和本项目 6.57M 参数 checkpoint 做质量或同规模性能的严格公平比较。这个实验主要用于验证成熟框架的生成链路和缓存优化形态。
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -125,12 +135,14 @@ actual prompt   no cache latency   kv cache latency
 
 第七，sliding-window KV cache 让缓存路径可以支持超过 `block_size` 的长生成。在生成 160 token 时，普通路径平均延迟为 0.9682 秒，sliding-window KV cache 平均延迟为 0.3821 秒，平均速度从 165.26 tok/s 提升到 418.79 tok/s。当前实现对 RoPE 模型启用滑动窗口缓存；非 RoPE 的 learned position embedding 模型仍然不能超过位置表长度。
 
+第八，Transformers baseline 展示了成熟框架的标准 `generate()` 链路。`sshleifer/tiny-gpt2` 生成 64 token 的平均速度为 1275.78 tok/s，明显快于本项目自写模型。但该模型极小，不能直接说明框架一定比当前实现快多少；更准确的理解是，Transformers 已经默认使用缓存生成，而本项目通过手写 KV cache 正在逐步复现这种推理优化机制。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是把当前自写 KV cache 和标准推理框架做对照，例如 Transformers pipeline、vLLM 或 SGLang，从而理解工程化推理系统为什么需要 batching、paged KV cache 和调度策略。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化。
+下一步可以继续围绕推理优化做两件事。第一是选择规模更接近的标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化，并为理解 vLLM / SGLang 的 batching、paged KV cache 和调度策略打基础。

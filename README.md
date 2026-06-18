@@ -4414,6 +4414,45 @@ output 64 avg tok/s        217.62          411.96
 
 观察：KV cache 对单请求、较低并发和长输出最明显；当并发升到 4 时，总吞吐提升变小，说明瓶颈开始转向 CPU 资源竞争和请求排队。
 
+### 3.8 Transformers Baseline
+
+为了和成熟推理框架做一个最小对照，新增 Hugging Face Transformers benchmark。默认使用 `sshleifer/tiny-gpt2`，这是一个极小测试模型，hidden size 只有 2，适合验证标准 `generate()` 链路，但不能和本项目 checkpoint 做生成质量上的公平比较。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_transformers_generation.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_transformers_generation.py \
+  --model-name sshleifer/tiny-gpt2 \
+  --max-new-tokens 64 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --out-dir out/transformers_tiny_gpt2_cpu
+```
+
+本次 CPU 结果：
+
+```text
+model                 avg latency   avg tok/s
+sshleifer/tiny-gpt2   0.0502s       1275.78
+```
+
+对照观察：
+
+```text
+model/path                         avg latency   avg tok/s
+self nanoGPT no cache, 64 tokens    0.2903s       220.49
+self nanoGPT kv cache, 64 tokens    0.1553s       412.17
+Transformers tiny-gpt2, 64 tokens   0.0502s       1275.78
+```
+
+这个结果主要说明两点。第一，成熟框架的 `generate()` 已经内置了高效缓存路径，哪怕是 CPU 上的小模型也很快。第二，这不是同规模模型的严格公平对比，因为 `tiny-gpt2` 极小；真正公平的下一步应该选择规模更接近的 Hugging Face 模型，或者把自写 checkpoint 转换成标准模型格式后再对比。
+
 阶段性部署报告见：
 
 ```text
