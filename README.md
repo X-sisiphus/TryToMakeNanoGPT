@@ -4186,6 +4186,49 @@ tokens_per_sec:
 
 这一步的关键变化是：模型不再只是“能在命令行生成”，而是变成了一个可以被外部程序调用的本地推理服务。
 
+### 3.3 API Benchmark
+
+`benchmark_generation.py` 测的是模型内部生成耗时，`benchmark_api.py` 测的是 HTTP 接口的端到端耗时。后者更接近真实使用时的体验，因为它包含请求发送、JSON 解析、模型生成和结果返回。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_api.py
+```
+
+先启动服务：
+
+```bash
+python tools/serve/serve_fastapi.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8010
+```
+
+再运行 API benchmark：
+
+```bash
+python tools/eval/benchmark_api.py \
+  --url http://127.0.0.1:8010/generate \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --max-new-tokens 40 \
+  --temperature 0.8 \
+  --top-k 40 \
+  --stop-at-eos \
+  --out-dir out/api_benchmark_sft_mixed_binding_cpu
+```
+
+本次 CPU 结果：
+
+```text
+avg end-to-end latency:       0.0980 sec
+avg server generation latency: 0.0962 sec
+avg HTTP overhead:            0.0018 sec
+avg tokens/s:                 228.61
+```
+
+观察：当前模型很小，本地 HTTP 额外开销约 0.002 秒，主要耗时仍然来自逐 token 生成。对于本项目这种本地小模型 demo，API 封装本身不是主要瓶颈。
+
 这一阶段的输出：
 
 - 一个可运行服务
