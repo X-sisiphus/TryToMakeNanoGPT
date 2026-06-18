@@ -4453,6 +4453,33 @@ Transformers tiny-gpt2, 64 tokens   0.0502s       1275.78
 
 这个结果主要说明两点。第一，成熟框架的 `generate()` 已经内置了高效缓存路径，哪怕是 CPU 上的小模型也很快。第二，这不是同规模模型的严格公平对比，因为 `tiny-gpt2` 极小；真正公平的下一步应该选择规模更接近的 Hugging Face 模型，或者把自写 checkpoint 转换成标准模型格式后再对比。
 
+为避免 Hugging Face 下载不稳定，也支持本地随机初始化 GPT-2 配置。这个模式不比较生成质量，只比较同等参数量附近的框架生成速度。
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_transformers_generation.py \
+  --random-gpt2 \
+  --n-embd 112 \
+  --n-layer 2 \
+  --n-head 4 \
+  --n-positions 128 \
+  --max-new-tokens 64 \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --out-dir out/transformers_random_gpt2_6m_cpu
+```
+
+本次 CPU 结果：
+
+```text
+model/path                              params   avg latency   avg tok/s
+self nanoGPT kv cache, 64 tokens        6.57M    0.1553s       412.17
+Transformers random GPT-2, 64 tokens    5.95M    0.0821s       779.46
+```
+
+这个对照更接近参数规模，但仍然不是严格同构比较：Transformers GPT-2 使用的是成熟框架里的 GPT-2 实现和 `generate()` 调度，本项目使用的是自写 LLaMA-style 结构、RoPE/GQA/RMSNorm/SwiGLU。它的价值在于说明：即使参数量接近，成熟框架的推理路径仍然有明显工程优势。
+
 阶段性部署报告见：
 
 ```text

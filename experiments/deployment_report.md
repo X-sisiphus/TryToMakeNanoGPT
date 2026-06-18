@@ -97,6 +97,16 @@ sshleifer/tiny-gpt2   0.0502s       1275.78
 
 需要注意，`sshleifer/tiny-gpt2` 是极小测试模型，hidden size 只有 2，不能和本项目 6.57M 参数 checkpoint 做质量或同规模性能的严格公平比较。这个实验主要用于验证成熟框架的生成链路和缓存优化形态。
 
+为了做更接近参数规模的框架对照，新增了本地随机初始化 GPT-2 baseline。该模型不需要下载权重，配置为 `n_embd=112, n_layer=2, n_head=4, n_positions=128`，参数量为 5.95M：
+
+```text
+model/path                              params   avg latency   avg tok/s
+self nanoGPT kv cache, 64 tokens        6.57M    0.1553s       412.17
+Transformers random GPT-2, 64 tokens    5.95M    0.0821s       779.46
+```
+
+这个 baseline 不能比较生成质量，因为它是随机初始化模型；它的作用是比较接近参数规模下，Transformers 标准 `generate()` 路径和本项目自写生成路径的速度差异。曾尝试下载 `roneneldan/TinyStories-8M` 和 `roneneldan/TinyStories-1M` 做预训练小模型对照，但本机 Hugging Face 下载出现超时和 DNS 解析失败，因此没有作为本阶段主结果。
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -135,7 +145,7 @@ actual prompt   no cache latency   kv cache latency
 
 第七，sliding-window KV cache 让缓存路径可以支持超过 `block_size` 的长生成。在生成 160 token 时，普通路径平均延迟为 0.9682 秒，sliding-window KV cache 平均延迟为 0.3821 秒，平均速度从 165.26 tok/s 提升到 418.79 tok/s。当前实现对 RoPE 模型启用滑动窗口缓存；非 RoPE 的 learned position embedding 模型仍然不能超过位置表长度。
 
-第八，Transformers baseline 展示了成熟框架的标准 `generate()` 链路。`sshleifer/tiny-gpt2` 生成 64 token 的平均速度为 1275.78 tok/s，明显快于本项目自写模型。但该模型极小，不能直接说明框架一定比当前实现快多少；更准确的理解是，Transformers 已经默认使用缓存生成，而本项目通过手写 KV cache 正在逐步复现这种推理优化机制。
+第八，Transformers baseline 展示了成熟框架的标准 `generate()` 链路。`sshleifer/tiny-gpt2` 生成 64 token 的平均速度为 1275.78 tok/s，但该模型极小，不能直接说明框架一定比当前实现快多少。更接近参数规模的随机 GPT-2 baseline 为 5.95M 参数，生成速度为 779.46 tok/s，仍然明显快于本项目 6.57M 自写模型的 412.17 tok/s。这说明 Transformers 的推理路径、缓存管理和生成循环已经有较强工程优化，而本项目通过手写 KV cache 正在逐步复现这些机制。
 
 ## 阶段结论
 
@@ -145,4 +155,4 @@ actual prompt   no cache latency   kv cache latency
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是选择规模更接近的标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化，并为理解 vLLM / SGLang 的 batching、paged KV cache 和调度策略打基础。
+下一步可以继续围绕推理优化做两件事。第一是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化，并为理解 vLLM / SGLang 的 batching、paged KV cache 和调度策略打基础。
