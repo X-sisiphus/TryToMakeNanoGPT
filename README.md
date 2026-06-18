@@ -4563,6 +4563,33 @@ sequential  8       0.4403s       363.43      18.17
 
 观察：变长 prompt 已经可以进入同一个 batch，并且可以和 KV cache 结合。batch size 为 8 时，关闭 KV cache 的 batched 模式是 11.96 req/s；开启 KV cache 后达到 42.05 req/s，输出吞吐从 239.28 tok/s 提升到 812.14 tok/s。为了验证 mask 和位置修正没有改变真实 token 的语义，做过一次 padded/unpadded 等价性检查，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这也解释了真实推理系统为什么需要 bucketing、动态 batching、paged KV cache 和更复杂的调度。
 
+### 3.10 Dynamic Batching
+
+手动 batch serving 需要客户端直接调用 `/generate_batch`，并一次传入多条 prompt。dynamic batching 则保持单请求接口：用户调用 `/generate_dynamic`，服务端把短时间窗口内到达的多个单请求暂存起来，再内部转成一次 batch 生成。
+
+当前教学版实现：
+
+- 等待窗口：5 ms
+- 最大 batch size：8
+- 只合并采样参数一致的请求
+- 内部复用 `/generate_batch` 的 padding mask 和 KV cache 路径
+
+验证时，同时发送 8 个 `/generate_dynamic` 请求，返回结果中的 `dynamic_batch_size` 都为 8，说明这些单请求确实被服务端合并成了一次 batch。
+
+并发 benchmark 对比普通 `/generate` 和 `/generate_dynamic`，两者都开启 KV cache：
+
+```text
+endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency
+/generate          1             18.84   376.86         0.0530s       0.0537s
+/generate_dynamic  1             16.14   322.86         0.0618s       0.0651s
+/generate          4             32.98   659.70         0.1196s       0.1249s
+/generate_dynamic  4             33.10   662.10         0.1206s       0.1434s
+/generate          8             17.88   357.57         0.4426s       0.4648s
+/generate_dynamic  8             42.71   854.29         0.1864s       0.1880s
+```
+
+观察：低并发时，dynamic batching 会额外等待 5 ms，所以单请求延迟略高；高并发时，它把多个请求合并到一次模型 forward，concurrency=8 时吞吐从 17.88 req/s 提升到 42.71 req/s，平均延迟也从 0.4426 秒降到 0.1864 秒。这体现了推理系统里的核心取舍：用很小的等待窗口换更高的硬件利用率。
+
 阶段性部署报告见：
 
 ```text

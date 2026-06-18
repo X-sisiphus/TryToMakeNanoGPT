@@ -144,6 +144,18 @@ sequential  4       0.2061s       360.67      19.64
 sequential  8       0.4403s       363.43      18.17
 ```
 
+最后实现教学版 dynamic batching。客户端仍然发送单条 `/generate_dynamic` 请求，服务端等待 5 ms，把同一时间窗口内采样参数一致的请求自动合并成 batch。并发 benchmark 对比如下：
+
+```text
+endpoint           concurrency   req/s   output tok/s   avg latency   p95 latency
+/generate          1             18.84   376.86         0.0530s       0.0537s
+/generate_dynamic  1             16.14   322.86         0.0618s       0.0651s
+/generate          4             32.98   659.70         0.1196s       0.1249s
+/generate_dynamic  4             33.10   662.10         0.1206s       0.1434s
+/generate          8             17.88   357.57         0.4426s       0.4648s
+/generate_dynamic  8             42.71   854.29         0.1864s       0.1880s
+```
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -188,12 +200,14 @@ actual prompt   no cache latency   kv cache latency
 
 第十，padding attention mask 让不同长度 prompt 可以进入同一个 batch。变长 prompt、关闭 KV cache 时，batch size 为 8 的合并请求从 sequential 的 10.50 req/s 提升到 11.96 req/s，收益有限。把变长 batch 和 KV cache 合并后，batch size 为 8 的合并请求达到 42.05 req/s，输出吞吐达到 812.14 tok/s。实现时还需要同步修正 `position_ids`，否则 left padding 会让真实 token 的位置编号整体后移，影响 RoPE 和 learned position embedding。padded/unpadded 等价性检查中，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这正是实际推理系统需要 bucketing、动态 batching、paged KV cache 和调度策略的原因。
 
+第十一，dynamic batching 把 batching 从客户端责任变成了服务端调度能力。低并发时，5 ms 等待窗口会让单请求略慢；但 concurrency=8 时，普通 `/generate` 的吞吐为 17.88 req/s，`/generate_dynamic` 达到 42.71 req/s，平均延迟也从 0.4426 秒下降到 0.1864 秒。这说明在请求足够密集时，短暂排队可以换来更高的模型计算利用率。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。KV cache、batching 和 mask 调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求调度限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是做动态 batching，把短时间内到达的多个单请求自动合并成一个 batch。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。
+下一步可以继续围绕推理优化做两件事。第一是让 dynamic batching 支持更完整的调度策略，例如按 prompt 长度 bucketing、按等待时间强制 flush、记录 batch size 分布。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。

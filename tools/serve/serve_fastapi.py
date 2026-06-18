@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import argparse
+import asyncio
 import os
 import time
 from typing import List, Optional
@@ -38,6 +39,13 @@ class GenerateBatchRequest(BaseModel):
     stop_at_eos: bool = Field(default=False)
     stop_at_text: Optional[str] = Field(default=None)
     use_kv_cache: bool = Field(default=False)
+
+
+class DynamicBatchItem:
+    def __init__(self, request, future, enqueueTime):
+        self.request = request
+        self.future = future
+        self.enqueueTime = enqueueTime
 
 
 class ModelServer:
@@ -289,6 +297,100 @@ class ModelServer:
         }
 
 
+class DynamicBatcher:
+    def __init__(self, server, maxBatchSize=8, waitMs=5):
+        self.server = server
+        self.maxBatchSize = maxBatchSize
+        self.waitSec = waitMs / 1000.0
+        self.pendingItems = []
+        self.flushTask = None
+        self.lock = asyncio.Lock()
+
+    def is_compatible(self, left, right):
+        return (
+            left.max_new_tokens == right.max_new_tokens
+            and left.temperature == right.temperature
+            and left.top_k == right.top_k
+            and left.repetition_penalty == right.repetition_penalty
+            and left.stop_at_eos == right.stop_at_eos
+            and left.stop_at_text == right.stop_at_text
+            and left.use_kv_cache == right.use_kv_cache
+        )
+
+    async def generate(self, request):
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        item = DynamicBatchItem(request, future, time.perf_counter())
+
+        async with self.lock:
+            self.pendingItems.append(item)
+            if self.flushTask is None or self.flushTask.done():
+                self.flushTask = asyncio.create_task(self.flush_after_wait())
+
+        return await future
+
+    async def flush_after_wait(self):
+        await asyncio.sleep(self.waitSec)
+
+        async with self.lock:
+            items = self.pendingItems
+            self.pendingItems = []
+
+        while items:
+            firstItem = items.pop(0)
+
+            batchItems = [firstItem]
+            remainingItems = []
+            for item in items:
+                if self.is_compatible(firstItem.request, item.request):
+                    if len(batchItems) < self.maxBatchSize:
+                        batchItems.append(item)
+                    else:
+                        remainingItems.append(item)
+                else:
+                    remainingItems.append(item)
+
+            await self.run_batch(batchItems)
+            items = remainingItems
+
+    async def run_batch(self, batchItems):
+        firstRequest = batchItems[0].request
+        batchRequest = GenerateBatchRequest(
+            prompts=[item.request.prompt for item in batchItems],
+            max_new_tokens=firstRequest.max_new_tokens,
+            temperature=firstRequest.temperature,
+            top_k=firstRequest.top_k,
+            repetition_penalty=firstRequest.repetition_penalty,
+            stop_at_eos=firstRequest.stop_at_eos,
+            stop_at_text=firstRequest.stop_at_text,
+            use_kv_cache=firstRequest.use_kv_cache,
+        )
+
+        try:
+            batchResponse = await asyncio.to_thread(
+                self.server.generate_batch,
+                batchRequest,
+            )
+            finishTime = time.perf_counter()
+            for item, output in zip(batchItems, batchResponse["outputs"]):
+                latency = finishTime - item.enqueueTime
+                result = {
+                    **output,
+                    "latency_sec": latency,
+                    "tokens_per_sec": output["new_tokens"] / latency if latency > 0 else 0.0,
+                    "device": batchResponse["device"],
+                    "vocab_type": batchResponse["vocab_type"],
+                    "checkpoint": batchResponse["checkpoint"],
+                    "use_kv_cache": batchResponse["use_kv_cache"],
+                    "dynamic_batch_size": batchResponse["batch_size"],
+                    "dynamic_wait_ms": self.waitSec * 1000,
+                }
+                item.future.set_result(result)
+        except Exception as exc:
+            for item in batchItems:
+                item.future.set_exception(exc)
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
@@ -300,6 +402,7 @@ def parse_args():
 
 def create_app(server):
     app = FastAPI(title="nanoGPT Inference Server")
+    dynamicBatcher = DynamicBatcher(server)
 
     @app.get("/health")
     def health():
@@ -315,6 +418,10 @@ def create_app(server):
     @app.post("/generate")
     def generate(request: GenerateRequest):
         return server.generate(request)
+
+    @app.post("/generate_dynamic")
+    async def generate_dynamic(request: GenerateRequest):
+        return await dynamicBatcher.generate(request)
 
     @app.post("/generate_batch")
     def generate_batch(request: GenerateBatchRequest):
