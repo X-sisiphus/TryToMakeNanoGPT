@@ -192,15 +192,6 @@ class ModelServer:
             raise HTTPException(status_code=400, detail="prompt 编码后为空")
 
         promptLengths = [len(promptIds) for promptIds in promptIdsList]
-        hasDifferentPromptLengths = len(set(promptLengths)) != 1
-        if hasDifferentPromptLengths and request.use_kv_cache:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "不同长度 prompt 的 batch serving 暂不支持 use_kv_cache=True；"
-                    "请先关闭 KV cache，或把 batch 内 prompt 做成相同 token 长度。"
-                ),
-            )
 
         if (
             request.use_kv_cache
@@ -247,7 +238,7 @@ class ModelServer:
             repetitionStart=context.shape[1],
             eosTokenId=eosTokenId,
             useKvCache=request.use_kv_cache,
-            attentionMask=None if request.use_kv_cache else attentionMask,
+            attentionMask=attentionMask,
         )
         self.sync_if_needed()
         latency = time.perf_counter() - start

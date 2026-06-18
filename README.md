@@ -4482,7 +4482,7 @@ Transformers random GPT-2, 64 tokens    5.95M    0.0821s       779.46
 
 ### 3.9 Batch Serving
 
-并发请求只是让多个请求同时进入服务；batch serving 则是把多个 prompt 合成一个 batch，让一次模型 forward 同时处理多条请求。当前实现新增了 `/generate_batch` 接口，并支持不同长度 prompt 的 left padding + padding attention mask。为了避免 left padding 改变 RoPE 和位置 embedding 的语义，模型会根据 `attention_mask` 重新计算每条样本自己的 `position_ids`。不同长度 batch 暂时不支持 `use_kv_cache=True`，因为这需要每条样本维护不同的 cache 位置和调度状态。
+并发请求只是让多个请求同时进入服务；batch serving 则是把多个 prompt 合成一个 batch，让一次模型 forward 同时处理多条请求。当前实现新增了 `/generate_batch` 接口，并支持不同长度 prompt 的 left padding + padding attention mask。为了避免 left padding 改变 RoPE 和位置 embedding 的语义，模型会根据 `attention_mask` 重新计算每条样本自己的 `position_ids`。现在不同长度 batch 也可以开启 `use_kv_cache=True`，生成阶段会根据每条样本的真实长度维护位置。
 
 新增脚本：
 
@@ -4535,24 +4535,33 @@ python tools/eval/benchmark_batch_api.py \
   --top-k 40 \
   --stop-at-eos \
   --vary-prompts \
-  --out-dir out/batch_api_varlen_mask_sft_mixed_binding_cpu
+  --use-kv-cache \
+  --out-dir out/batch_api_varlen_kv_cache_sft_mixed_binding_cpu
 ```
 
-结果：
+关闭 KV cache 的结果：
 
 ```text
 mode        batch   avg latency   avg tok/s   avg req/s
-batched     1       0.1346s       172.80      8.64
-batched     2       0.2378s       175.54      8.78
-batched     4       0.3675s       205.21      11.14
-batched     8       0.6455s       249.49      12.47
-sequential  1       0.1349s       159.31      7.97
-sequential  2       0.3463s       126.05      6.30
-sequential  4       0.4092s       195.77      9.79
-sequential  8       0.7827s       204.84      10.24
+batched     8       0.6687s       239.28      11.96
+sequential  8       0.7619s       210.04      10.50
 ```
 
-观察：变长 prompt 已经可以进入同一个 batch。batch size 为 8 时，合并请求从 sequential 的 10.24 req/s 提升到 12.47 req/s，输出吞吐从 204.84 tok/s 提升到 249.49 tok/s。收益比等长 + KV cache 小，原因是 padding 会带来无效计算，而且当前变长 batch 暂时关闭 KV cache。为了验证 mask 和位置修正没有改变真实 token 的语义，做过一次 padded/unpadded 等价性检查，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这也解释了真实推理系统为什么需要 bucketing、动态 batching、paged KV cache 和更复杂的调度。
+开启 KV cache 的结果：
+
+```text
+mode        batch   avg latency   avg tok/s   avg req/s
+batched     1       0.0556s       360.11      18.01
+batched     2       0.0849s       470.99      23.55
+batched     4       0.1138s       703.46      35.17
+batched     8       0.1903s       812.14      42.05
+sequential  1       0.0529s       378.40      18.92
+sequential  2       0.1173s       341.30      17.06
+sequential  4       0.2061s       360.67      19.64
+sequential  8       0.4403s       363.43      18.17
+```
+
+观察：变长 prompt 已经可以进入同一个 batch，并且可以和 KV cache 结合。batch size 为 8 时，关闭 KV cache 的 batched 模式是 11.96 req/s；开启 KV cache 后达到 42.05 req/s，输出吞吐从 239.28 tok/s 提升到 812.14 tok/s。为了验证 mask 和位置修正没有改变真实 token 的语义，做过一次 padded/unpadded 等价性检查，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这也解释了真实推理系统为什么需要 bucketing、动态 batching、paged KV cache 和更复杂的调度。
 
 阶段性部署报告见：
 

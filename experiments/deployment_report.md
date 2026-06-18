@@ -122,18 +122,26 @@ sequential  8       0.4740s       371.38      16.88
 batched     8       0.1987s       886.25      40.28
 ```
 
-随后加入 left padding + padding attention mask，使 `/generate_batch` 支持不同长度 prompt。模型会根据 `attention_mask` 为每条样本重新计算 `position_ids`，避免 padding 改变 RoPE 和位置 embedding 的语义。变长 batch 暂时关闭 KV cache：
+随后加入 left padding + padding attention mask，使 `/generate_batch` 支持不同长度 prompt。模型会根据 `attention_mask` 为每条样本重新计算 `position_ids`，避免 padding 改变 RoPE 和位置 embedding 的语义。变长 batch 先关闭 KV cache 测试：
 
 ```text
 mode        batch   avg latency   avg tok/s   avg req/s
-batched     1       0.1346s       172.80      8.64
-batched     2       0.2378s       175.54      8.78
-batched     4       0.3675s       205.21      11.14
-batched     8       0.6455s       249.49      12.47
-sequential  1       0.1349s       159.31      7.97
-sequential  2       0.3463s       126.05      6.30
-sequential  4       0.4092s       195.77      9.79
-sequential  8       0.7827s       204.84      10.24
+batched     8       0.6687s       239.28      11.96
+sequential  8       0.7619s       210.04      10.50
+```
+
+随后把变长 batch 和 KV cache 合并。`forward_with_cache` 可以接收 `attentionMask` 和每行独立的 `positionIds`，生成阶段每新增一个 token 也同步扩展 mask：
+
+```text
+mode        batch   avg latency   avg tok/s   avg req/s
+batched     1       0.0556s       360.11      18.01
+batched     2       0.0849s       470.99      23.55
+batched     4       0.1138s       703.46      35.17
+batched     8       0.1903s       812.14      42.05
+sequential  1       0.0529s       378.40      18.92
+sequential  2       0.1173s       341.30      17.06
+sequential  4       0.2061s       360.67      19.64
+sequential  8       0.4403s       363.43      18.17
 ```
 
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
@@ -178,14 +186,14 @@ actual prompt   no cache latency   kv cache latency
 
 第九，batch serving 能显著提高吞吐。等长 prompt 且开启 KV cache 时，逐条请求的 req/s 基本停在 17 左右；batch size 为 8 时，合并请求达到 40.28 req/s，输出吞吐达到 886.25 tok/s。这说明将多个请求合并到同一次 forward 可以提高模型计算利用率。
 
-第十，padding attention mask 让不同长度 prompt 可以进入同一个 batch。变长 prompt、关闭 KV cache 时，batch size 为 8 的合并请求从 sequential 的 10.24 req/s 提升到 12.47 req/s，输出吞吐从 204.84 tok/s 提升到 249.49 tok/s，收益小于等长场景。原因是 padding 会带来无效计算，而且当前变长 batch 还没有和 KV cache 合并。实现时还需要同步修正 `position_ids`，否则 left padding 会让真实 token 的位置编号整体后移，影响 RoPE 和 learned position embedding。padded/unpadded 等价性检查中，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这正是实际推理系统需要 bucketing、动态 batching、paged KV cache 和调度策略的原因。
+第十，padding attention mask 让不同长度 prompt 可以进入同一个 batch。变长 prompt、关闭 KV cache 时，batch size 为 8 的合并请求从 sequential 的 10.50 req/s 提升到 11.96 req/s，收益有限。把变长 batch 和 KV cache 合并后，batch size 为 8 的合并请求达到 42.05 req/s，输出吞吐达到 812.14 tok/s。实现时还需要同步修正 `position_ids`，否则 left padding 会让真实 token 的位置编号整体后移，影响 RoPE 和 learned position embedding。padded/unpadded 等价性检查中，最后一个真实 token 的 logits 最大误差约为 `3.34e-06`。这正是实际推理系统需要 bucketing、动态 batching、paged KV cache 和调度策略的原因。
 
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能。KV cache、batching 和 mask 调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求调度限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。KV cache、batching 和 mask 调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求调度限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是把变长 batch 和 KV cache 合并起来，让每条样本维护自己的 cache 位置与结束状态。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。
+下一步可以继续围绕推理优化做两件事。第一是做动态 batching，把短时间内到达的多个单请求自动合并成一个 batch。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。

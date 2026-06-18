@@ -173,8 +173,10 @@ class MultiHeadAttention(nn.Module):
             if pastKv is None:
                 wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
             if attentionMask is not None:
-                keyMask = attentionMask[:, None, None, :].bool()
-                queryMask = attentionMask[:, None, :, None].bool()
+                keyMask = attentionMask[:, -k.shape[-2]:]
+                queryMask = attentionMask[:, -T:]
+                keyMask = keyMask[:, None, None, :].bool()
+                queryMask = queryMask[:, None, :, None].bool()
                 wei = wei.masked_fill(~keyMask, float("-inf"))
                 wei = torch.where(queryMask, wei, torch.zeros_like(wei))
             wei = F.softmax(wei, dim=-1)
@@ -324,7 +326,15 @@ class BigramLanguageModel(nn.Module):
             loss = F.cross_entropy(logits, targets, ignore_index=-100)
         return logits,loss
 
-    def forward_with_cache(self, idx, pastKvs=None, useCache=True, positionOffset=None):
+    def forward_with_cache(
+            self,
+            idx,
+            pastKvs=None,
+            useCache=True,
+            positionOffset=None,
+            attentionMask=None,
+            positionIds=None,
+        ):
         B,T = idx.shape
         tokenEmbd = self.tokenEmbeddingTable(idx)
         x = tokenEmbd
@@ -332,15 +342,28 @@ class BigramLanguageModel(nn.Module):
         pastLength = 0
         if pastKvs is not None and len(pastKvs) > 0:
             pastLength = pastKvs[0][0].shape[1]
+
         if positionOffset is None:
             positionOffset = pastLength
 
+        if positionIds is None and attentionMask is not None:
+            if idx.shape[1] == attentionMask.shape[1]:
+                positionIds = attentionMask.long().cumsum(dim=1) - 1
+                positionIds = positionIds.clamp(min=0)
+            else:
+                positionIds = attentionMask.long().sum(dim=1, keepdim=True) - idx.shape[1]
+                positionIds = positionIds + torch.arange(idx.shape[1], device=idx.device)
+                positionIds = positionIds.clamp(min=0)
+
         if self.positionEmbeddingTable is not None:
-            positions = torch.arange(
-                positionOffset,
-                positionOffset + T,
-                device=idx.device,
-            )
+            if positionIds is None:
+                positions = torch.arange(
+                    positionOffset,
+                    positionOffset + T,
+                    device=idx.device,
+                )
+            else:
+                positions = positionIds
             positionEmbd = self.positionEmbeddingTable(positions)
             x = x + positionEmbd
 
@@ -354,6 +377,8 @@ class BigramLanguageModel(nn.Module):
                 pastKv=pastKv,
                 useCache=useCache,
                 positionOffset=positionOffset,
+                attentionMask=attentionMask,
+                positionIds=positionIds,
             )
             if presentKv is not None:
                 presentK, presentV = presentKv
@@ -418,7 +443,7 @@ class BigramLanguageModel(nn.Module):
         assert repetitionStart >= 0
         if topK is not None:
             assert topK > 0
-        canUseKvCache = attentionMask is None and useKvCache and (
+        canUseKvCache = useKvCache and (
             self.config.useRoPE
             or idx.shape[1] + maxNewTokens <= self.config.blockSize
         )
@@ -431,14 +456,21 @@ class BigramLanguageModel(nn.Module):
                     if self.config.useRoPE:
                         idxCond = idx[:, -self.config.blockSize:]
                         cachePosition = idx.shape[1] - idxCond.shape[1]
+                        if attentionMask is not None:
+                            attentionMaskCond = attentionMask[:, -self.config.blockSize:]
+                        else:
+                            attentionMaskCond = None
                     else:
                         idxCond = idx
+                        attentionMaskCond = attentionMask
                 else:
                     idxCond = idx[:, -1:]
+                    attentionMaskCond = attentionMask
                 logits, pastKvs = self.forward_with_cache(
                     idxCond,
                     pastKvs=pastKvs,
                     positionOffset=cachePosition,
+                    attentionMask=attentionMaskCond,
                 )
                 cachePosition += idxCond.shape[1]
             else:
