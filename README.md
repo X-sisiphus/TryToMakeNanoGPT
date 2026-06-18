@@ -4229,6 +4229,42 @@ avg tokens/s:                 228.61
 
 观察：当前模型很小，本地 HTTP 额外开销约 0.002 秒，主要耗时仍然来自逐 token 生成。对于本项目这种本地小模型 demo，API 封装本身不是主要瓶颈。
 
+### 3.4 API Concurrency Benchmark
+
+单请求 benchmark 只能说明一个请求的延迟，并发 benchmark 用来观察多个请求同时进入服务时的排队和吞吐变化。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_api_concurrency.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_api_concurrency.py \
+  --url http://127.0.0.1:8010/generate \
+  --concurrency 1,2,4 \
+  --requests-per-level 8 \
+  --warmup-runs 1 \
+  --max-new-tokens 40 \
+  --temperature 0.8 \
+  --top-k 40 \
+  --stop-at-eos \
+  --out-dir out/api_concurrency_sft_mixed_binding_cpu
+```
+
+本次 CPU 结果：
+
+```text
+concurrency   req/s   output tok/s   avg latency   p95 latency
+1             11.03   242.70         0.0905s       0.0979s
+2             19.01   420.63         0.1044s       0.1107s
+4             23.90   525.74         0.1638s       0.1755s
+```
+
+观察：并发从 1 提到 4 后，整体吞吐从 11.03 req/s 提升到 23.90 req/s，但平均延迟也从 0.0905 秒上升到 0.1638 秒。这说明当前服务在本地小模型场景下可以通过并发提高吞吐，但请求之间会出现排队和资源竞争。部署时需要在吞吐和延迟之间做取舍。
+
 这一阶段的输出：
 
 - 一个可运行服务
