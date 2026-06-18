@@ -4480,6 +4480,48 @@ Transformers random GPT-2, 64 tokens    5.95M    0.0821s       779.46
 
 这个对照更接近参数规模，但仍然不是严格同构比较：Transformers GPT-2 使用的是成熟框架里的 GPT-2 实现和 `generate()` 调度，本项目使用的是自写 LLaMA-style 结构、RoPE/GQA/RMSNorm/SwiGLU。它的价值在于说明：即使参数量接近，成熟框架的推理路径仍然有明显工程优势。
 
+### 3.9 Batch Serving
+
+并发请求只是让多个请求同时进入服务；batch serving 则是把多个 prompt 合成一个 batch，让一次模型 forward 同时处理多条请求。当前实现新增了 `/generate_batch` 接口。为了保持实现简单，教学版 batch serving 要求同一个 batch 内的 prompt token 长度一致，暂时不做 padding attention mask。
+
+新增脚本：
+
+```text
+tools/eval/benchmark_batch_api.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_batch_api.py \
+  --base-url http://127.0.0.1:8010 \
+  --batch-sizes 1,2,4,8 \
+  --num-runs 3 \
+  --warmup-runs 1 \
+  --max-new-tokens 40 \
+  --temperature 0.8 \
+  --top-k 40 \
+  --stop-at-eos \
+  --use-kv-cache \
+  --out-dir out/batch_api_kv_cache_sft_mixed_binding_cpu
+```
+
+本次 CPU 结果：
+
+```text
+mode        batch   avg latency   avg tok/s   avg req/s
+sequential  1       0.0585s       376.35      17.11
+batched     1       0.0580s       379.54      17.25
+sequential  2       0.1206s       365.13      16.60
+batched     2       0.0801s       549.60      24.98
+sequential  4       0.2361s       372.66      16.94
+batched     4       0.1175s       749.51      34.07
+sequential  8       0.4740s       371.38      16.88
+batched     8       0.1987s       886.25      40.28
+```
+
+观察：逐条请求时，req/s 基本停在 17 左右；batch size 增加到 8 后，batched 模式达到 40.28 req/s，输出吞吐达到 886.25 tok/s。这说明合并请求能显著提高模型计算利用率，也是 vLLM / SGLang 等推理系统要做 batching 的原因。
+
 阶段性部署报告见：
 
 ```text

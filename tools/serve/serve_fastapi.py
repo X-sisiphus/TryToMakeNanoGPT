@@ -7,7 +7,7 @@ sys.path.insert(0, str(ROOT))
 import argparse
 import os
 import time
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -20,6 +20,17 @@ from model import BigramLanguageModel, GPTConfig
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(default="\n")
+    max_new_tokens: int = Field(default=80, ge=1, le=512)
+    temperature: float = Field(default=1.0, gt=0.0)
+    top_k: Optional[int] = Field(default=None, ge=1)
+    repetition_penalty: float = Field(default=1.0, ge=1.0)
+    stop_at_eos: bool = Field(default=False)
+    stop_at_text: Optional[str] = Field(default=None)
+    use_kv_cache: bool = Field(default=False)
+
+
+class GenerateBatchRequest(BaseModel):
+    prompts: List[str] = Field(min_length=1, max_length=32)
     max_new_tokens: int = Field(default=80, ge=1, le=512)
     temperature: float = Field(default=1.0, gt=0.0)
     top_k: Optional[int] = Field(default=None, ge=1)
@@ -167,6 +178,104 @@ class ModelServer:
             "use_kv_cache": request.use_kv_cache,
         }
 
+    @torch.no_grad()
+    def generate_batch(self, request):
+        try:
+            promptIdsList = [self.encode(prompt) for prompt in request.prompts]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if any(len(promptIds) == 0 for promptIds in promptIdsList):
+            raise HTTPException(status_code=400, detail="prompt 编码后为空")
+
+        promptLengths = [len(promptIds) for promptIds in promptIdsList]
+        if len(set(promptLengths)) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "教学版 batch serving 要求 batch 内 prompt token 长度一致；"
+                    f"当前长度为 {promptLengths}"
+                ),
+            )
+
+        if (
+            request.use_kv_cache
+            and not self.model.config.useRoPE
+            and promptLengths[0] + request.max_new_tokens > self.model.config.blockSize
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "非 RoPE 模型 use_kv_cache=True 时，prompt_tokens + max_new_tokens "
+                    f"不能超过 block_size={self.model.config.blockSize}"
+                ),
+            )
+
+        context = torch.tensor(
+            promptIdsList,
+            dtype=torch.long,
+            device=self.device,
+        )
+        eosTokenId = self.eosTokenId if request.stop_at_eos else None
+
+        self.sync_if_needed()
+        start = time.perf_counter()
+        generated = self.model.generate(
+            context,
+            request.max_new_tokens,
+            temperature=request.temperature,
+            topK=request.top_k,
+            repetitionPenalty=request.repetition_penalty,
+            repetitionStart=context.shape[1],
+            eosTokenId=eosTokenId,
+            useKvCache=request.use_kv_cache,
+        )
+        self.sync_if_needed()
+        latency = time.perf_counter() - start
+
+        outputs = []
+        totalNewTokens = 0
+
+        for rowIdx, prompt in enumerate(request.prompts):
+            generatedIds = generated[rowIdx].tolist()
+            promptLen = promptLengths[rowIdx]
+
+            if request.stop_at_eos and eosTokenId is not None:
+                generatedTail = generatedIds[promptLen:]
+                if eosTokenId in generatedTail:
+                    eosPos = generatedIds.index(eosTokenId, promptLen)
+                    generatedIds = generatedIds[:eosPos]
+
+            text = self.decode(generatedIds)
+            if request.stop_at_text is not None and request.stop_at_text in text:
+                text = text.split(request.stop_at_text)[0]
+
+            completionText = text[len(prompt) :] if text.startswith(prompt) else text
+            newTokens = max(0, len(generatedIds) - promptLen)
+            totalNewTokens += newTokens
+
+            outputs.append(
+                {
+                    "text": text,
+                    "completion_text": completionText,
+                    "prompt_tokens": promptLen,
+                    "new_tokens": newTokens,
+                    "total_tokens": len(generatedIds),
+                }
+            )
+
+        return {
+            "outputs": outputs,
+            "batch_size": len(request.prompts),
+            "latency_sec": latency,
+            "total_new_tokens": totalNewTokens,
+            "tokens_per_sec": totalNewTokens / latency if latency > 0 else 0.0,
+            "device": self.device,
+            "vocab_type": self.vocabType,
+            "checkpoint": self.checkpointPath,
+            "use_kv_cache": request.use_kv_cache,
+        }
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -194,6 +303,10 @@ def create_app(server):
     @app.post("/generate")
     def generate(request: GenerateRequest):
         return server.generate(request)
+
+    @app.post("/generate_batch")
+    def generate_batch(request: GenerateBatchRequest):
+        return server.generate_batch(request)
 
     return app
 

@@ -23,7 +23,7 @@ unit: mm/yr
 
 ## 实验内容
 
-本阶段主要完成了七类实验。第一类是直接测试模型内部生成速度，用来观察纯生成性能。第二类是测试 HTTP API 单请求延迟，用来观察服务封装带来的额外开销。第三类是并发请求测试，用来观察多个请求同时到达时吞吐和延迟的变化。第四类是上下文长度测试，用来观察 prompt 变长时的成本。第五类是输出长度测试，用来观察生成 token 数增加时的成本。第六类是 KV cache 测试，用来观察缓存历史 key/value 后对逐 token 生成速度的提升。第七类是 Transformers baseline，用来和成熟框架的标准 `generate()` 链路做初步对照。
+本阶段主要完成了八类实验。第一类是直接测试模型内部生成速度，用来观察纯生成性能。第二类是测试 HTTP API 单请求延迟，用来观察服务封装带来的额外开销。第三类是并发请求测试，用来观察多个请求同时到达时吞吐和延迟的变化。第四类是上下文长度测试，用来观察 prompt 变长时的成本。第五类是输出长度测试，用来观察生成 token 数增加时的成本。第六类是 KV cache 测试，用来观察缓存历史 key/value 后对逐 token 生成速度的提升。第七类是 Transformers baseline，用来和成熟框架的标准 `generate()` 链路做初步对照。第八类是 batch serving，用来观察把多条请求合并到一次模型 forward 后的吞吐变化。
 
 这些实验对应的脚本如下：
 
@@ -35,6 +35,7 @@ tools/eval/benchmark_api_concurrency.py
 tools/eval/benchmark_context_length.py
 tools/eval/benchmark_output_length.py
 tools/eval/benchmark_transformers_generation.py
+tools/eval/benchmark_batch_api.py
 ```
 
 ## 结果汇总
@@ -107,6 +108,20 @@ Transformers random GPT-2, 64 tokens    5.95M    0.0821s       779.46
 
 这个 baseline 不能比较生成质量，因为它是随机初始化模型；它的作用是比较接近参数规模下，Transformers 标准 `generate()` 路径和本项目自写生成路径的速度差异。曾尝试下载 `roneneldan/TinyStories-8M` 和 `roneneldan/TinyStories-1M` 做预训练小模型对照，但本机 Hugging Face 下载出现超时和 DNS 解析失败，因此没有作为本阶段主结果。
 
+batch serving benchmark 对比逐条请求和合并请求。当前教学版 `/generate_batch` 要求同一个 batch 内的 prompt token 长度一致：
+
+```text
+mode        batch   avg latency   avg tok/s   avg req/s
+sequential  1       0.0585s       376.35      17.11
+batched     1       0.0580s       379.54      17.25
+sequential  2       0.1206s       365.13      16.60
+batched     2       0.0801s       549.60      24.98
+sequential  4       0.2361s       372.66      16.94
+batched     4       0.1175s       749.51      34.07
+sequential  8       0.4740s       371.38      16.88
+batched     8       0.1987s       886.25      40.28
+```
+
 KV cache 接入 FastAPI 后，服务链路 benchmark 的对比如下：
 
 ```text
@@ -147,12 +162,14 @@ actual prompt   no cache latency   kv cache latency
 
 第八，Transformers baseline 展示了成熟框架的标准 `generate()` 链路。`sshleifer/tiny-gpt2` 生成 64 token 的平均速度为 1275.78 tok/s，但该模型极小，不能直接说明框架一定比当前实现快多少。更接近参数规模的随机 GPT-2 baseline 为 5.95M 参数，生成速度为 779.46 tok/s，仍然明显快于本项目 6.57M 自写模型的 412.17 tok/s。这说明 Transformers 的推理路径、缓存管理和生成循环已经有较强工程优化，而本项目通过手写 KV cache 正在逐步复现这些机制。
 
+第九，batch serving 能显著提高吞吐。逐条请求时，req/s 基本停在 17 左右；batch size 为 8 时，合并请求达到 40.28 req/s，输出吞吐达到 886.25 tok/s。这说明将多个请求合并到同一次 forward 可以提高模型计算利用率。当前实现仍是教学版，只支持等长 prompt；真实推理系统还需要 padding mask、动态 batching、paged KV cache 和请求调度。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。KV cache 是推理优化中最核心的机制之一，但它不能消除所有瓶颈，高并发时仍然会受到 CPU 资源和请求调度限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。KV cache 和 batching 是推理优化中最核心的两个机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求调度限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。第二是进一步做 batch serving，让一次 forward 同时处理多个请求，观察吞吐和延迟如何变化，并为理解 vLLM / SGLang 的 batching、paged KV cache 和调度策略打基础。
+下一步可以继续围绕推理优化做两件事。第一是为 batch serving 加入 padding attention mask，让不同长度 prompt 也能进入同一个 batch。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。
