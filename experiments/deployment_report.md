@@ -233,12 +233,24 @@ actual prompt   no cache latency   kv cache latency
 
 第十四，adaptive wait 让调度器开始根据队列压力调整等待时间。缩小版 burst 测试中，adaptive 1-8 ms 相比固定 5 ms，平均延迟从 0.0958 秒降到 0.0747 秒，吞吐从 104.34 req/s 提升到 144.94 req/s。与此同时，这次实现还修复了一个重要调度 bug：如果 flush 推理期间有新请求入队，旧版本不会自动开启下一轮 flush，可能导致尾部请求挂起。修复后，每轮 flush 结束都会检查是否还有 pending 请求，并自动续跑。
 
+第十五，调度实验已经整理成总控 benchmark。`tools/eval/run_dynamic_scheduler_benchmark.py` 会自动按不同配置启动 FastAPI 服务，等待 `/health`，压测 `/generate_dynamic`，读取 `/dynamic_stats`，关闭服务，并把结果汇总到 `scheduler_summary.csv` 和 `report.md`。这样可以稳定比较 fixed wait、adaptive wait、不同 worker 数和不同并发，不再依赖手动重复操作。
+
+缩小版 smoke test 使用 `fixed_w1` 和 `adaptive_w2` 两组配置，concurrency=4、requests=4、max-new-tokens=2：
+
+```text
+strategy       req/s    output tok/s   avg latency   p95 latency
+fixed_w1       114.90   229.81         0.0339s       0.0341s
+adaptive_w2    113.23   226.46         0.0345s       0.0347s
+```
+
+这组结果不是为了证明某个策略更优，而是验证完整实验链路已经打通：服务可以自动拉起和关闭，压测脚本可以拿到动态调度字段，最终可以生成跨配置汇总表。后续只需要扩大并发、请求数和输出长度，就能得到更有代表性的部署对比。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。总控 benchmark 则把这些调度策略变成可重复比较的实验。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
 
 ## 后续方向
 
-下一步可以继续围绕推理优化做两件事。第一是把调度实验整理成一个总控 benchmark，自动比较 fixed wait、adaptive wait、不同 worker 数和不同并发。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。
+下一步可以继续围绕推理优化做两件事。第一是扩大总控 benchmark 的实验规模，比较更多并发、输出长度和等待窗口参数。第二是在网络条件稳定时选择规模更接近的预训练标准模型做 Transformers 对照，或者把当前自写 checkpoint 转换成标准模型格式后再比较。

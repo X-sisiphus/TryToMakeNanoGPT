@@ -4660,6 +4660,72 @@ adaptive 1-8ms     144.94   567.70         0.0747s       0.0811s       2.10ms   
 
 观察：这次 burst 场景里 adaptive wait 有更低的平均延迟和更高吞吐，但它不是一定优于固定等待。自适应等待真正要解决的是请求到达不均匀的问题；在稳定高并发、请求几乎同时到达时，固定等待也可能表现很好。
 
+### 3.14 Dynamic Scheduler Benchmark Runner
+
+前面每次比较调度策略，都需要手动启动服务、跑 benchmark、查看 `/dynamic_stats`、再关闭服务。现在新增一个总控脚本：
+
+```text
+tools/eval/run_dynamic_scheduler_benchmark.py
+```
+
+它会自动完成：
+
+- 按配置启动 FastAPI 服务
+- 等待 `/health` 可用
+- 调用 `benchmark_api_concurrency.py` 压测 `/generate_dynamic`
+- 读取 `/dynamic_stats`
+- 关闭当前服务
+- 汇总所有配置到 `scheduler_summary.csv` 和 `report.md`
+
+完整运行示例：
+
+```bash
+python tools/eval/run_dynamic_scheduler_benchmark.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --configs fixed_w1,fixed_w2,adaptive_w2 \
+  --concurrency 4,8,12 \
+  --requests-per-level 12 \
+  --max-new-tokens 8 \
+  --stop-at-eos \
+  --use-kv-cache \
+  --vary-prompts \
+  --out-dir out/dynamic_scheduler_benchmark
+```
+
+其中三组内置配置分别是：
+
+```text
+fixed_w1      固定等待窗口，1 个 batch worker
+fixed_w2      固定等待窗口，2 个 batch worker
+adaptive_w2   自适应等待窗口，2 个 batch worker
+```
+
+缩小版验证命令：
+
+```bash
+python tools/eval/run_dynamic_scheduler_benchmark.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8012 \
+  --configs fixed_w1,adaptive_w2 \
+  --concurrency 4 \
+  --requests-per-level 4 \
+  --max-new-tokens 2 \
+  --warmup-runs 1 \
+  --stop-at-eos \
+  --use-kv-cache \
+  --vary-prompts \
+  --out-dir out/dynamic_scheduler_smoke
+```
+
+输出文件：
+
+```text
+out/dynamic_scheduler_smoke/fixed_w1/summary.csv
+out/dynamic_scheduler_smoke/adaptive_w2/summary.csv
+out/dynamic_scheduler_smoke/scheduler_summary.csv
+out/dynamic_scheduler_smoke/report.md
+```
+
 阶段性部署报告见：
 
 ```text
