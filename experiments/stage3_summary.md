@@ -23,6 +23,7 @@ out/sft_mixed_binding_multi_hard_2200/ckpt.pt
 - batch serving benchmark：`tools/eval/benchmark_batch_api.py`
 - Transformers baseline benchmark：`tools/eval/benchmark_transformers_generation.py`
 - dynamic scheduler 总控 benchmark：`tools/eval/run_dynamic_scheduler_benchmark.py`
+- 内存 benchmark：`tools/eval/benchmark_memory.py`
 - 完整部署报告：`experiments/deployment_report.md`
 
 ## Demo 运行方式
@@ -72,6 +73,7 @@ python tools/serve/demo_client.py \
 - Length bucketing：按 prompt 长度排序合批，降低 padding 浪费。
 - Concurrent batch workers：同一轮 flush 拆出多批时，允许多个 batch 并行推理，减少尾部等待。
 - Adaptive wait：根据队列压力在最小等待和最大等待之间调整 flush 时机。
+- Memory benchmark：记录 RSS、peak RSS，以及 CUDA/MPS 可用时的设备侧内存。
 
 ## 代表性结果
 
@@ -100,6 +102,16 @@ fixed_w2       115.09   920.71         0.0961s       4.00ms
 adaptive_w2    126.49   1011.91        0.0900s       1.34ms
 ```
 
+内存 smoke test，CPU、KV cache、生成 16 token：
+
+```text
+stage          rss MB   peak rss MB
+before_load    178.73   178.77
+after_load     262.08   271.11
+after_warmup   269.08   271.11
+after_run_1    269.50   271.11
+```
+
 ## 阶段结论
 
 这一阶段最重要的收获是：推理部署不是简单地把 `sample.py` 包一层 HTTP。
@@ -109,6 +121,7 @@ adaptive_w2    126.49   1011.91        0.0900s       1.34ms
 - 生成路径看 KV cache、上下文长度、输出长度。
 - batch 路径看 padding mask、position ids、变长 batch 和缓存兼容。
 - 调度路径看等待窗口、batch size、请求到达分布、worker 数和排队时间。
+- 资源路径看 RSS、峰值内存、设备 allocated/reserved memory。
 
 当前项目已经具备一个最小可用的本地推理系统：可以启动服务，可以发 demo 请求，可以跑 benchmark，可以输出性能报告，也可以解释不同优化为什么有效。
 

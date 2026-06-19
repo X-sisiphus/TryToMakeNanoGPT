@@ -4793,6 +4793,47 @@ station: ONSA
 
 demo client 会同时打印 `/health`、请求参数、生成结果；调用 `generate_dynamic` 时还会打印 `/dynamic_stats`。这让第三阶段的输出从“有服务和 benchmark”变成了“有一个可以直接演示的本地推理流程”。
 
+### 3.16 Memory Benchmark
+
+原计划里还有“测显存/内存”。当前机器主要使用 CPU/MPS，所以先补一个轻量内存 benchmark：
+
+```text
+tools/eval/benchmark_memory.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_memory.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --max-new-tokens 16 \
+  --warmup-runs 1 \
+  --num-runs 2 \
+  --stop-at-eos \
+  --use-kv-cache \
+  --out-dir out/memory_benchmark_smoke
+```
+
+它会记录：
+
+- `rss_mb`：操作系统看到的当前进程常驻内存
+- `peak_rss_mb`：当前进程历史峰值常驻内存
+- `device_allocated_mb`：CUDA/MPS 已分配设备内存，如果当前设备支持
+- `device_reserved_mb`：CUDA reserved 或 MPS driver allocated，如果当前设备支持
+
+本次 CPU smoke test 结果：
+
+```text
+stage          rss MB   peak rss MB
+before_load    178.73   178.77
+after_load     262.08   271.11
+after_warmup   269.08   271.11
+after_run_0    269.20   271.11
+after_run_1    269.50   271.11
+```
+
+观察：加载模型让 RSS 增加约 83.34 MB；生成阶段峰值约 271.11 MB。这里的 RSS 不等于模型参数大小，因为 Python 解释器、PyTorch runtime、tokenizer、张量临时缓冲区都会占用内存。以后如果换 CUDA 环境，这个脚本也能同时记录 `torch.cuda.memory_allocated()` 和 `torch.cuda.memory_reserved()`。
+
 阶段性部署报告见：
 
 ```text
