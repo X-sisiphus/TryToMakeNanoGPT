@@ -4726,6 +4726,23 @@ out/dynamic_scheduler_smoke/scheduler_summary.csv
 out/dynamic_scheduler_smoke/report.md
 ```
 
+正式对比使用 concurrency=4,8,12、requests-per-level=12、max-new-tokens=8，结果如下：
+
+```text
+strategy       concurrency   req/s    output tok/s   avg latency   p95 latency   avg wait
+fixed_w1       4             62.30    472.48         0.0639s       0.0665s       5.40ms
+fixed_w1       8             67.15    537.17         0.0988s       0.1190s       4.97ms
+fixed_w1       12            86.47    691.75         0.1034s       0.1361s       31.38ms
+fixed_w2       4             61.76    494.05         0.0644s       0.0673s       5.52ms
+fixed_w2       8             66.26    530.08         0.1003s       0.1211s       5.01ms
+fixed_w2       12            115.09   920.71         0.0961s       0.1025s       4.00ms
+adaptive_w2    4             65.85    526.79         0.0605s       0.0636s       7.89ms
+adaptive_w2    8             75.04    600.28         0.0861s       0.0995s       3.69ms
+adaptive_w2    12            126.49   1011.91        0.0900s       0.0933s       1.34ms
+```
+
+观察：并发 12 时，`fixed_w1` 的平均排队等待升到 31.38 ms，因为同一轮 flush 被拆成多批后只能串行执行。`fixed_w2` 把平均等待降到 4.00 ms，吞吐从 86.47 req/s 提升到 115.09 req/s。`adaptive_w2` 在这组请求分布里进一步把平均等待降到 1.34 ms，吞吐达到 126.49 req/s。这说明调度器的核心不是“batch 越大越好”，而是在等待时间、batch 利用率和并行执行之间做平衡。
+
 阶段性部署报告见：
 
 ```text

@@ -245,6 +245,23 @@ adaptive_w2    113.23   226.46         0.0345s       0.0347s
 
 这组结果不是为了证明某个策略更优，而是验证完整实验链路已经打通：服务可以自动拉起和关闭，压测脚本可以拿到动态调度字段，最终可以生成跨配置汇总表。后续只需要扩大并发、请求数和输出长度，就能得到更有代表性的部署对比。
 
+正式对比使用 concurrency=4,8,12、requests-per-level=12、max-new-tokens=8，结果如下：
+
+```text
+strategy       concurrency   req/s    output tok/s   avg latency   p95 latency   avg wait
+fixed_w1       4             62.30    472.48         0.0639s       0.0665s       5.40ms
+fixed_w1       8             67.15    537.17         0.0988s       0.1190s       4.97ms
+fixed_w1       12            86.47    691.75         0.1034s       0.1361s       31.38ms
+fixed_w2       4             61.76    494.05         0.0644s       0.0673s       5.52ms
+fixed_w2       8             66.26    530.08         0.1003s       0.1211s       5.01ms
+fixed_w2       12            115.09   920.71         0.0961s       0.1025s       4.00ms
+adaptive_w2    4             65.85    526.79         0.0605s       0.0636s       7.89ms
+adaptive_w2    8             75.04    600.28         0.0861s       0.0995s       3.69ms
+adaptive_w2    12            126.49   1011.91        0.0900s       0.0933s       1.34ms
+```
+
+这组正式对比说明：并发 12 时，单 worker 的 fixed wait 会把第二批请求压在队列里，平均等待达到 31.38 ms；改成 2 个 worker 后，等待降到 4.00 ms，吞吐提升到 115.09 req/s；在同样 2 个 worker 下，adaptive wait 进一步把等待降到 1.34 ms，吞吐达到 126.49 req/s。也就是说，dynamic batching 的收益不仅来自合批本身，还来自调度策略能否及时处理被拆出来的后续 batch。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
