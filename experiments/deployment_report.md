@@ -262,11 +262,13 @@ adaptive_w2    12            126.49   1011.91        0.0900s       0.0933s      
 
 这组正式对比说明：并发 12 时，单 worker 的 fixed wait 会把第二批请求压在队列里，平均等待达到 31.38 ms；改成 2 个 worker 后，等待降到 4.00 ms，吞吐提升到 115.09 req/s；在同样 2 个 worker 下，adaptive wait 进一步把等待降到 1.34 ms，吞吐达到 126.49 req/s。也就是说，dynamic batching 的收益不仅来自合批本身，还来自调度策略能否及时处理被拆出来的后续 batch。
 
+第十六，补充了一个最小 demo client。`tools/serve/demo_client.py` 会先读取 `/health`，再调用 `/generate` 或 `/generate_dynamic`，最后打印生成结果、延迟、tokens/s；如果走 dynamic batching，还会额外打印 `/dynamic_stats`。短输出验证中，默认字段抽取 prompt 生成了 `station: ONSA`。这一步的意义是把推理服务从“可以被 benchmark 调用”推进到“可以被人直接演示和检查”。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。总控 benchmark 则把这些调度策略变成可重复比较的实验。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。总控 benchmark 则把这些调度策略变成可重复比较的实验。demo client 让服务具备了直接演示入口。KV cache、batching、mask 和调度是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费和请求分布限制。
 
 ## 后续方向
 

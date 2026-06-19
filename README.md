@@ -4743,10 +4743,66 @@ adaptive_w2    12            126.49   1011.91        0.0900s       0.0933s      
 
 观察：并发 12 时，`fixed_w1` 的平均排队等待升到 31.38 ms，因为同一轮 flush 被拆成多批后只能串行执行。`fixed_w2` 把平均等待降到 4.00 ms，吞吐从 86.47 req/s 提升到 115.09 req/s。`adaptive_w2` 在这组请求分布里进一步把平均等待降到 1.34 ms，吞吐达到 126.49 req/s。这说明调度器的核心不是“batch 越大越好”，而是在等待时间、batch 利用率和并行执行之间做平衡。
 
+### 3.15 Demo Client
+
+除了直接写 `curl`，现在也可以用一个很小的 demo client 调用服务：
+
+```text
+tools/serve/demo_client.py
+```
+
+先启动服务：
+
+```bash
+python tools/serve/serve_fastapi.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --port 8010 \
+  --dynamic-max-concurrent-batches 2 \
+  --dynamic-adaptive-wait \
+  --dynamic-min-wait-ms 1 \
+  --dynamic-max-wait-ms 8
+```
+
+再调用普通生成接口：
+
+```bash
+python tools/serve/demo_client.py \
+  --base-url http://127.0.0.1:8010 \
+  --endpoint generate \
+  --max-new-tokens 40 \
+  --stop-at-eos \
+  --use-kv-cache
+```
+
+或者调用 dynamic batching 入口：
+
+```bash
+python tools/serve/demo_client.py \
+  --base-url http://127.0.0.1:8010 \
+  --endpoint generate_dynamic \
+  --max-new-tokens 40 \
+  --stop-at-eos \
+  --use-kv-cache
+```
+
+本次短输出验证中，默认 prompt 生成了：
+
+```text
+station: ONSA
+```
+
+demo client 会同时打印 `/health`、请求参数、生成结果；调用 `generate_dynamic` 时还会打印 `/dynamic_stats`。这让第三阶段的输出从“有服务和 benchmark”变成了“有一个可以直接演示的本地推理流程”。
+
 阶段性部署报告见：
 
 ```text
 experiments/deployment_report.md
+```
+
+第三阶段总结见：
+
+```text
+experiments/stage3_summary.md
 ```
 
 这一阶段的输出：
