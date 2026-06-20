@@ -4834,6 +4834,46 @@ after_run_1    269.50   271.11
 
 观察：加载模型让 RSS 增加约 83.34 MB；生成阶段峰值约 271.11 MB。这里的 RSS 不等于模型参数大小，因为 Python 解释器、PyTorch runtime、tokenizer、张量临时缓冲区都会占用内存。以后如果换 CUDA 环境，这个脚本也能同时记录 `torch.cuda.memory_allocated()` 和 `torch.cuda.memory_reserved()`。
 
+### 3.17 Dynamic INT8 Quantization
+
+原计划里还有 INT8 / INT4 量化。当前先做一个 CPU 上的动态 INT8 量化概念实验：
+
+```text
+tools/eval/benchmark_quantization.py
+```
+
+运行方式：
+
+```bash
+python tools/eval/benchmark_quantization.py \
+  --checkpoint out/sft_mixed_binding_multi_hard_2200/ckpt.pt \
+  --max-new-tokens 8 \
+  --warmup-runs 1 \
+  --num-runs 2 \
+  --stop-at-eos \
+  --use-kv-cache \
+  --out-dir out/quantization_benchmark_smoke
+```
+
+当前实验使用 PyTorch dynamic quantization，把 `nn.Linear` 动态量化为 INT8。它只在 CPU 路径上做，不改变 embedding、norm、attention softmax 等非 Linear 部分。
+
+本次 smoke test 结果：
+
+```text
+mode           state dict   param/buffer   avg latency   avg tok/s
+fp32           25.21 MB     25.20 MB       0.0209s       383.41
+dynamic_int8   15.77 MB     12.40 MB       0.0269s       296.96
+```
+
+两个模式都能生成相同的短输出前缀：
+
+```text
+station: ONSA
+signal:
+```
+
+观察：动态 INT8 明显减小了模型序列化体积和参数/ buffer 体积，但在当前 Mac CPU + qnnpack + 6.57M 小模型上没有提速，反而更慢。原因是量化计算本身也有打包、反量化和 kernel 调度开销；当模型很小、batch 很小、生成又是逐 token 时，这些开销可能抵消 INT8 乘法的收益。真实大模型量化通常更关注显存占用和能否放进设备，其次才是速度。
+
 阶段性部署报告见：
 
 ```text
