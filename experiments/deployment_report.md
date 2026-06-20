@@ -268,11 +268,13 @@ adaptive_w2    12            126.49   1011.91        0.0900s       0.0933s      
 
 第十八，补充了动态 INT8 量化实验。`tools/eval/benchmark_quantization.py` 使用 PyTorch dynamic quantization，把 `nn.Linear` 替换为动态 INT8 Linear。CPU smoke test 中，FP32 state dict 约 25.21 MB，动态 INT8 后约 15.77 MB；参数和 buffer 统计从 25.20 MB 降到 12.40 MB。但平均延迟从 0.0209 秒增加到 0.0269 秒，tokens/s 从 383.41 降到 296.96。这说明量化不是天然提速：在小模型、小 batch、逐 token decode 和 Mac CPU/qnnpack 环境下，量化 kernel 的额外开销可能超过 INT8 计算节省。它的稳定收益首先是减小模型体积和内存压力。
 
+第十九，补充了 vLLM / SGLang 对接层。当前自写 checkpoint 是 `BigramLanguageModel + GPTConfig`，不是 Hugging Face 或 MLX 标准模型格式，因此不能直接交给 vLLM / SGLang。当前更合理的学习路径是：先用标准小模型启动 vLLM 或 SGLang 的 OpenAI-compatible API，再用 `tools/eval/benchmark_openai_compatible.py` 统一测 latency、tokens/s 和样例输出。本地环境检查显示，当前机器是 Apple M1 Pro，MPS 可用，已安装 Transformers，但没有安装 vLLM、SGLang、MLX。因此本阶段不强行安装重型 serving 框架，而是先补齐可复用的 OpenAI-compatible benchmark 入口。
+
 ## 阶段结论
 
 到这里，当前项目已经从训练和采样推进到了一个最小可用的本地推理服务。这个服务可以通过 HTTP 接收 prompt，返回生成结果、延迟、tokens/s 等指标，也可以通过 benchmark 脚本观察单请求、并发、上下文长度和输出长度对性能的影响。
 
-目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。总控 benchmark 则把这些调度策略变成可重复比较的实验。demo client 让服务具备了直接演示入口。内存 benchmark 补上了部署评估里的资源占用维度。动态 INT8 量化补上了模型体积和低精度推理的基本实验。KV cache、batching、mask、调度和量化是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费、请求分布、内存占用和硬件 kernel 支持限制。
+目前最重要的结论是：对于这个 6.57M 参数的小模型，服务框架开销很小，性能瓶颈主要在逐 token 生成；并发可以提高吞吐，但会增加延迟；长上下文和长输出都会明显增加推理成本；KV cache 可以显著降低生成阶段的重复计算，并且这种收益能传递到 FastAPI 服务层。加入 sliding-window 之后，RoPE 模型的缓存路径已经可以支持超过 `block_size` 的长生成。Transformers baseline 说明成熟框架的生成链路已经默认包含类似缓存优化。batch serving 进一步说明，请求合并可以提升整体吞吐。padding attention mask 让变长 prompt batch 成为可能；继续接入 KV cache 后，变长 batch 也能获得明显吞吐提升。dynamic batching 进一步把 batch 合并从手动 API 变成服务端自动调度。length bucketing 则开始处理变长 prompt 的 padding 浪费。并行 batch worker 可以缓解同一轮调度中多批串行导致的尾部等待。adaptive wait 让等待窗口开始随队列压力变化。总控 benchmark 则把这些调度策略变成可重复比较的实验。demo client 让服务具备了直接演示入口。内存 benchmark 补上了部署评估里的资源占用维度。动态 INT8 量化补上了模型体积和低精度推理的基本实验。OpenAI-compatible benchmark 为后续接 vLLM / SGLang 留出了统一评测入口。KV cache、batching、mask、调度和量化是推理优化中最核心的机制，但它们不能消除所有瓶颈，高并发时仍然会受到 CPU 资源、padding 浪费、请求分布、内存占用、模型格式和硬件 kernel 支持限制。
 
 ## 后续方向
 

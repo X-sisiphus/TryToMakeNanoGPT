@@ -25,6 +25,7 @@ out/sft_mixed_binding_multi_hard_2200/ckpt.pt
 - dynamic scheduler 总控 benchmark：`tools/eval/run_dynamic_scheduler_benchmark.py`
 - 内存 benchmark：`tools/eval/benchmark_memory.py`
 - 动态 INT8 量化 benchmark：`tools/eval/benchmark_quantization.py`
+- OpenAI-compatible benchmark：`tools/eval/benchmark_openai_compatible.py`
 - 完整部署报告：`experiments/deployment_report.md`
 
 ## Demo 运行方式
@@ -76,6 +77,7 @@ python tools/serve/demo_client.py \
 - Adaptive wait：根据队列压力在最小等待和最大等待之间调整 flush 时机。
 - Memory benchmark：记录 RSS、peak RSS，以及 CUDA/MPS 可用时的设备侧内存。
 - Dynamic INT8 quantization：把 Linear 动态量化为 INT8，对比模型体积和生成速度。
+- OpenAI-compatible API：为后续接 vLLM / SGLang / 标准 serving 服务保留统一 benchmark 入口。
 
 ## 代表性结果
 
@@ -133,10 +135,13 @@ dynamic_int8   15.77 MB     12.40 MB       0.0269s       296.96
 - 调度路径看等待窗口、batch size、请求到达分布、worker 数和排队时间。
 - 资源路径看 RSS、峰值内存、设备 allocated/reserved memory。
 - 量化路径看模型体积、低精度 kernel 支持，以及速度和质量是否真的改善。
+- 框架路径看模型格式、OpenAI-compatible API、硬件后端和 serving 框架支持范围。
 
 当前项目已经具备一个最小可用的本地推理系统：可以启动服务，可以发 demo 请求，可以跑 benchmark，可以输出性能报告，也可以解释不同优化为什么有效。
 
 ## 下一步
+
+第三阶段里，当前自写 checkpoint 不直接上 vLLM / SGLang。更合理的下一步是在标准模型上体验 vLLM-Metal 或 CUDA/Linux 上的 vLLM/SGLang，再用 OpenAI-compatible benchmark 做统一对比。
 
 第四阶段可以从部署工程转向研究切口。比较自然的方向是：
 

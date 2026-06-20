@@ -4874,6 +4874,59 @@ signal:
 
 观察：动态 INT8 明显减小了模型序列化体积和参数/ buffer 体积，但在当前 Mac CPU + qnnpack + 6.57M 小模型上没有提速，反而更慢。原因是量化计算本身也有打包、反量化和 kernel 调度开销；当模型很小、batch 很小、生成又是逐 token 时，这些开销可能抵消 INT8 乘法的收益。真实大模型量化通常更关注显存占用和能否放进设备，其次才是速度。
 
+### 3.18 vLLM / SGLang Interface
+
+原计划里写了“用 vLLM / SGLang 部署模型”。这里需要区分两件事：
+
+```text
+当前自写 checkpoint:
+BigramLanguageModel + GPTConfig + 自定义权重命名
+
+vLLM / SGLang 常规部署:
+Hugging Face / MLX / 标准模型结构 + 标准 tokenizer/config
+```
+
+所以当前自写 checkpoint 不能直接交给 vLLM / SGLang。硬接的工作量主要不是“启动服务”，而是要把模型结构、权重命名、config、tokenizer、generation config 都转换成 serving 框架认识的标准格式。这个工作可以做，但它更像模型格式适配项目，不适合作为第三阶段收尾主线。
+
+更合理的做法是：用标准小模型先体验 vLLM / SGLang 的 OpenAI-compatible API，然后用统一 benchmark 对比服务指标。
+
+本项目新增了一个通用 OpenAI-compatible benchmark：
+
+```text
+tools/eval/benchmark_openai_compatible.py
+```
+
+只要服务提供 `/v1/chat/completions`，就可以这样测：
+
+```bash
+python tools/eval/benchmark_openai_compatible.py \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model Qwen/Qwen2.5-0.5B-Instruct \
+  --num-runs 5 \
+  --warmup-runs 1 \
+  --max-tokens 64 \
+  --out-dir out/openai_compatible_benchmark
+```
+
+当前本地环境检查结果：
+
+```text
+machine: Apple M1 Pro / arm64
+torch: 2.8.0
+MPS: available
+transformers: installed
+vllm: not installed
+sglang: not installed
+mlx: not installed
+```
+
+阶段判断：
+
+- vLLM 现在已有 Apple Silicon 路线，主要通过 vLLM-Metal / MLX。
+- SGLang 的 Apple Silicon 支持仍偏新，当前更适合在 CUDA/Linux 环境优先体验。
+- 在这台机器上，不建议为了第三阶段收尾强行安装和调试 vLLM/SGLang。
+- 下一次真正跑 vLLM/SGLang 时，建议使用标准模型，而不是当前自写 checkpoint。
+
 阶段性部署报告见：
 
 ```text
