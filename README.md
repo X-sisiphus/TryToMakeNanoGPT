@@ -4946,18 +4946,40 @@ experiments/stage3_summary.md
 - 一份性能报告
 - 一组部署参数对比结果
 
-## 第四阶段：研究切口
+## 第四阶段：TelescopeOps-Agent
 
-第四阶段是长期方向选择。结合你的背景，比较自然的路线是“小模型训练工程 + 天文/时空智能领域数据 + 可靠评测”。
+第四阶段进入一个新的应用研究项目：
 
-可以考虑的研究问题：
+```text
+TelescopeOps-Agent
+面向望远镜系统运维日志的多工具诊断 Agent
+```
 
-- 小模型 reasoning 能力能否通过高质量数据提升
-- DPO / GRPO 在小模型上什么时候有效
-- 数据质量比数据规模重要到什么程度
-- 长上下文训练如何影响短上下文能力
-- 量化对 reasoning / 代码 / 领域问答能力的伤害有多大
-- RAG 能否弥补小模型知识不足
-- 天文和时空智能任务中，哪些知识适合写进参数，哪些更适合用检索增强
+项目入口：
 
-短期最推荐的下一步：先把当前自写模型做成本地可交互 demo，并补齐 EOS 停止、latency 记录和基础错误处理。
+```text
+projects/telescope_ops_agent/
+```
+
+核心路线：
+
+```text
+RAG -> Tool-Augmented QA -> Diagnostic Agent -> OPD Agent
+```
+
+这里 RAG 是 agent 的基础能力之一，但不是终点。RAG 负责从日志、手册、历史案例里取证据；agent 负责规划诊断流程、选择工具、检查证据是否足够，并输出可追踪诊断。OPD 作为后续研究增强，用来让小模型 agent 从自己生成的错误轨迹中学习。
+
+第一版项目目标：
+
+- 构造可控的望远镜运维诊断数据
+- 设计统一 schema 和评估指标
+- 实现 Direct / RAG / Tool-Augmented baseline
+- 逐步升级到诊断 agent
+- 最后探索 On-Policy Distillation 是否能提升小模型 agent 的诊断能力
+
+核心文档：
+
+```text
+projects/telescope_ops_agent/project_plan.md
+projects/telescope_ops_agent/schema.md
+```
