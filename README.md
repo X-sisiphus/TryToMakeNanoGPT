@@ -4946,20 +4946,22 @@ experiments/stage3_summary.md
 - 一份性能报告
 - 一组部署参数对比结果
 
-## 第四阶段：TelescopeOps-Agent
+## 第四阶段：独立应用研究项目
 
-第四阶段进入一个新的应用研究项目：
+第四阶段已经从当前 nanoGPT 学习仓库中分离出去，作为独立项目继续：
 
 ```text
 TelescopeOps-Agent
 面向望远镜系统运维日志的多工具诊断 Agent
 ```
 
-项目入口：
+独立项目路径：
 
 ```text
-projects/telescope_ops_agent/
+/Users/xuaoran/Documents/Codex/telescope-ops-agent
 ```
+
+当前仓库继续保留为 nanoGPT / 小模型训练 / 推理部署学习仓库。
 
 核心路线：
 
@@ -4980,6 +4982,6 @@ RAG -> Tool-Augmented QA -> Diagnostic Agent -> OPD Agent
 核心文档：
 
 ```text
-projects/telescope_ops_agent/project_plan.md
-projects/telescope_ops_agent/schema.md
+/Users/xuaoran/Documents/Codex/telescope-ops-agent/project_plan.md
+/Users/xuaoran/Documents/Codex/telescope-ops-agent/schema.md
 ```
